@@ -1,0 +1,36 @@
+{
+  "name": "ewebcity-claude-skills",
+  "version": "1.0.0",
+  "description": "eWebCity.co.uk Claude skills: safe full-stack engineering workflow and complete website SEO/AEO/GEO + performance audit-and-fix. Install into Claude Code with one npx command.",
+  "bin": {
+    "ewebcity-claude-skills": "bin/install.js"
+  },
+  "files": [
+    "bin",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-skills",
+    "seo",
+    "aeo",
+    "geo",
+    "performance",
+    "core-web-vitals",
+    "full-stack",
+    "ewebcity"
+  ],
+  "author": "eWebCity <https://eWebCity.co.uk>",
+  "homepage": "https://eWebCity.co.uk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mahimzq/ewebcity-claude-skills.git"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
