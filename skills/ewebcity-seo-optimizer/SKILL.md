@@ -1,6 +1,6 @@
 ---
 name: ewebcity-seo-optimizer
-description: Audit and improve website technical SEO, AEO, GEO and page performance using URL-level evidence, bounded crawling, current official guidance and verified changes. Use for crawlability, indexing diagnostics, robots.txt, sitemaps, canonicals, structured data, JavaScript SEO, Core Web Vitals, AI search visibility, Search Console data and before/after SEO reviews. Support live websites, saved HTML and repository fixes; distinguish measured results from recommendations and preserve the user's publishing and crawler preferences.
+description: Audit and improve website technical SEO, AEO, GEO and performance with URL-level evidence, accurate crawler-specific diagnostics, interactive visual reports and verified repository fixes. Use for robots, sitemaps, indexing directives, canonicals, hreflang, structured data, JavaScript SEO, Core Web Vitals, AI search visibility and before/after reviews. Run bounded live or saved-HTML audits, import Lighthouse/PageSpeed/CrUX exports, and adapt to coding agents or chat-only environments without inventing unavailable measurements or capabilities.
 ---
 
 # eWebCity SEO, AEO and GEO Optimizer
@@ -16,6 +16,7 @@ Read the relevant reference before making a recommendation:
 - `references/required-files.md`: decide which files are appropriate; preserve real routes, identity and existing policies.
 - `references/performance.md`: separate field Core Web Vitals, lab measurements and source-code observations.
 - `references/evidence-and-measurement.md`: finding records, coverage, provider exports and valid comparisons.
+- `references/execution-and-reporting.md`: choose a real execution mode, turn evidence into verifiable patches and deliver a useful visual report across agent environments.
 
 Use `scripts/audit.py` for a repeatable source-HTML audit. It requires Python 3.10+ and its bundled helper files, with no third-party Python packages. Locate the script relative to this skill's directory; do not assume the current directory is the skill directory.
 
@@ -31,9 +32,20 @@ python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
 python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
   --url https://example.com --output ./seo-audit/after \
   --compare ./seo-audit/baseline/audit.json
+
+# Include supplied lab or field exports. Importing does not make API calls.
+python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
+  --html ./page.html --url https://example.com/page --output ./seo-audit/evidence \
+  --performance-json ./lighthouse.json --performance-json ./crux.json
 ```
 
-Treat example paths/domains as examples, not deployment configuration. Read `--help` for actual limits and local-development options. The script observes server HTML; it does not execute JavaScript, query search indexes, obtain private analytics or measure Core Web Vitals. Expand the audit with available authorised tools when those checks matter.
+Treat example paths/domains as examples, not deployment configuration. Read `--help` for actual limits and local-development options. The script observes server HTML; it does not execute JavaScript, query search indexes, obtain private analytics or collect performance measurements itself. It can import supplied Lighthouse, PageSpeed Insights and CrUX API JSON with provenance. Expand the audit with available authorised tools when other checks matter.
+
+## Adapt to the actual host
+
+Check file access, Python execution, outbound network access, a rendered browser and authorised repository/provider tools. Use the capabilities present, regardless of whether the model is Claude, OpenAI, DeepSeek or another provider. Read `references/execution-and-reporting.md` when selecting a fallback mode or producing a client-facing report.
+
+In a coding agent, locate this complete skill folder and run its scripts. In a chat with code execution but no network, audit supplied HTML and exports offline. In a chat without execution, inspect the actual supplied files and provide findings plus the exact local command; do not claim generated reports or completed tests. Native skill discovery is the host's responsibility. Portable prompt exports supply instructions and files, not a terminal or private account access.
 
 ## 1. Establish the task and baseline
 
@@ -52,6 +64,7 @@ Start with representative page types, then expand within the budget: home, servi
 - Distinguish permission to crawl, response status, `noindex`, declared canonical, snippet controls and actual provider indexing state. A 200 response does not prove indexing.
 - Where rendering matters, compare source HTML with the actual rendered DOM on representative templates. Record the browser/tool and result; source-only checks cannot establish the rendered result.
 - Import Search Console, Bing or analytics evidence only through an authorised connection or a supplied export. Preserve dates, property, filters, units and provenance. Mark unavailable checks **not checked**.
+- For performance exports, use repeatable `--performance-json` inputs. Preserve final URL, lab/field mode, URL/origin scope, device, aggregation and supplied collection dates. Never relabel TBT as INP, origin data as a page result or an old export as a new measurement. Explain rejected or omitted data and retain the source-file hash.
 - Report discovered, fetched, analysed and skipped URLs separately, including limits and stop reasons. Do not extrapolate untested templates or uncrawled pages into confirmed findings.
 
 Use statuses `pass`, `fail`, `warning`, `not_applicable` and `not_checked`. Keep severity, confidence and business priority separate. Every issue needs a stable rule ID, affected URL(s), evidence, impact, proposed fix, verification method and a current official source where applicable.
@@ -97,6 +110,8 @@ Lead with the outcome and coverage, then provide:
 3. Validation results and before/after comparisons, with unverified items visible.
 4. `audit.json`, `report.html` and `fixes.md` from the script when run, retaining the baseline separately.
 5. Remaining actions that require missing access, a real business value or deployment, plus rollback information for applied changes.
+
+Open the report when browser tooling is available. Check a desktop and narrow mobile width, the filter/reset controls and the print layout before promising a polished deliverable. Summarise the scope and most consequential evidence in chat so the files are not the only explanation. Call out demonstration/synthetic inputs if used; never present an example report as a real client audit.
 
 Treat official documentation as changeable. Each reference records its last verification date; check current primary documentation before relying on feature eligibility, crawler behaviour, metrics or submission APIs. Do not silently turn one provider's guidance into a claim about every AI/search system.
 

@@ -30,7 +30,8 @@ def fixture_server(routes):
             body = body.encode("utf-8") if isinstance(body, str) else body
             self.send_response(status)
             for name, value in headers.items():
-                self.send_header(name, value)
+                for item_value in value if isinstance(value, list) else [value]:
+                    self.send_header(name, item_value)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             try:
@@ -178,6 +179,15 @@ Disallow: /second
 
 
 class HTTPBoundaryTests(unittest.TestCase):
+    def test_repeated_robot_headers_preserve_field_boundaries(self):
+        with fixture_server({"/": (200, {
+            "Content-Type": "text/html",
+            "X-Robots-Tag": ["googlebot: noindex", "nofollow"],
+        }, "<title>Example</title>")}) as (base, _requests):
+            response = SafeClient(base, allow_localhost=True, delay=0).fetch(base + "/")
+        self.assertEqual(response.header_values["x-robots-tag"], ["googlebot: noindex", "nofollow"])
+        self.assertEqual(response.headers["x-robots-tag"], "googlebot: noindex, nofollow")
+
     def client(self, url, **options):
         return SafeClient(url, allow_localhost=True, delay=0, **options)
 

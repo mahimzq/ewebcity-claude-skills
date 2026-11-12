@@ -10,6 +10,7 @@ import argparse
 from collections import Counter, defaultdict, deque
 from datetime import datetime, timezone
 import hashlib
+from html import unescape
 from html.parser import HTMLParser
 import json
 from pathlib import Path
@@ -22,8 +23,9 @@ if sys.version_info < (3, 10):
     raise SystemExit("Python 3.10 or newer is required for the eWebCity audit runtime.")
 
 from safe_http import BudgetExceeded, FetchError, PRODUCT_TOKEN, RobotsPolicy, SafeClient, normalise_url, origin
+from html_evidence import decode_html, link_header_evidence, robots_evidence
 
-TOOL_VERSION = "2.0.0"
+TOOL_VERSION = "2.1.0"
 SCHEMA_VERSION = "1.0"
 REFERENCE_CHECKED_AT = "2026-11-12"
 SEARCH_DOCS = "https://developers.google.com/search/docs/"
@@ -39,16 +41,20 @@ REFERENCES = {
     "image": SEARCH_DOCS + "appearance/google-images",
     "html": SEARCH_DOCS + "fundamentals/seo-starter-guide",
     "mobile": SEARCH_DOCS + "crawling-indexing/mobile/mobile-sites-mobile-first-indexing",
+    "robots_meta": SEARCH_DOCS + "crawling-indexing/robots-meta-tag",
+    "hreflang": SEARCH_DOCS + "specialty/international/localized-versions",
+    "encoding": "https://html.spec.whatwg.org/multipage/parsing.html#determining-the-character-encoding",
 }
 NOT_PERFORMED = [
     "JavaScript execution, rendered DOM, CSS layout, visual accessibility and mobile interaction testing.",
-    "Core Web Vitals (LCP, INP, CLS), Lighthouse, browser loading performance and field measurements.",
+    "The source crawler does not itself measure Core Web Vitals (LCP, INP, CLS), Lighthouse or browser loading performance; separately imported measurements, if supplied, retain their own provenance.",
     "Google/Bing indexing status, rankings, Search Console, Analytics or other authenticated account data.",
     "AI answer citations, brand mentions, AI visibility, model training use or guaranteed search inclusion.",
     "Full structured-data eligibility or truth validation; JSON-LD checks cover JSON syntax only.",
     "Unlinked/orphan pages, exhaustive site coverage, external destinations, assets or backlink validation.",
     "Business accuracy, ownership, content expertise, editorial quality and search intent validation.",
     "llms.txt adoption and PWA manifest checks; their absence is not treated as an SEO failure.",
+    "Full hreflang ISO-code registry validation, content-language matching and sitemap hreflang annotations; checks cover observed HTML/HTTP annotations and fetched return links only.",
 ]
 ASSET_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".svg", ".ico", ".css", ".js", ".mjs", ".map", ".woff", ".woff2", ".ttf", ".eot", ".mp3", ".mp4", ".webm", ".pdf", ".zip", ".gz", ".xml", ".json"}
 
@@ -93,12 +99,16 @@ def finding(rule_id: str, url: str, status: str, severity: str, observation: str
 class SourceHTML(HTMLParser):
     """Extract only facts present in the saved/received HTML source."""
 
+    CDATA_CONTENT_ELEMENTS = ("script", "style", "title", "textarea", "xmp", "iframe", "noembed", "noframes")
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.titles: list[str] = []
         self.descriptions: list[str] = []
         self.robots: list[dict] = []
         self.canonicals: list[str] = []
+        self.canonical_locations: list[str] = []
+        self.hreflang: list[dict] = []
         self.headings: list[dict] = []
         self.hrefs: list[str] = []
         self.resources: list[str] = []
@@ -113,19 +123,32 @@ class SourceHTML(HTMLParser):
         self._script = False
         self._suppressed = 0
         self._inert_depth = 0
+        self._literal_text_tag: str | None = None
+        self._in_head = False
+        self._body_started = False
         self.text_parts: list[str] = []
         self.href_count = self.image_count = self.script_count = 0
         self.extraction_limited = False
         self.links_extraction_limited = False
         self.images_extraction_limited = False
+        self.hreflang_extraction_limited = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values = dict(attrs)
+        values = {}
+        for key, value in attrs:
+            values.setdefault(key, value)  # HTML ignores later duplicate attributes.
         if tag in ("template", "noscript"):
             self._inert_depth += 1
             return
         if self._inert_depth:
             return
+        if tag == "head":
+            self._in_head = True
+        elif tag == "body":
+            self._body_started = True
+            self._in_head = False
+        if tag in ("title", "textarea", "xmp", "iframe", "noembed", "noframes"):
+            self._literal_text_tag = tag
         if tag == "html" and not self.lang:
             self.lang = values.get("lang") or ""
         if tag == "base" and self.base is None:
@@ -138,7 +161,7 @@ class SourceHTML(HTMLParser):
             name, content = (values.get("name") or "").lower(), values.get("content") or ""
             if name == "description":
                 self.descriptions.append(content)
-            elif name in ("robots", "googlebot", "bingbot"):
+            elif name in ("robots", "googlebot", "googlebot-news", "bingbot"):
                 self.robots.append({"agent": name, "content": content})
             elif name == "viewport":
                 self.viewport.append(content)
@@ -147,6 +170,13 @@ class SourceHTML(HTMLParser):
             href = values.get("href") or ""
             if "canonical" in relations:
                 self.canonicals.append(href)
+                self.canonical_locations.append("head" if self._in_head else "body" if self._body_started else "implicit_head_or_fragment")
+            if "alternate" in relations and "hreflang" in values:
+                if len(self.hreflang) < 200:
+                    self.hreflang.append({"href": href, "language": values.get("hreflang") or "", "source": "html:link",
+                        "location": "head" if self._in_head else "body" if self._body_started else "implicit_head_or_fragment"})
+                else:
+                    self.extraction_limited = self.hreflang_extraction_limited = True
             if any(rel in relations for rel in ("stylesheet", "preload", "modulepreload")):
                 self.resources.append(href)
         if tag in ("a", "area") and values.get("href") is not None:
@@ -187,6 +217,10 @@ class SourceHTML(HTMLParser):
             return
         if self._inert_depth:
             return
+        if tag == "head":
+            self._in_head = False
+        if tag == self._literal_text_tag:
+            self._literal_text_tag = None
         if tag == "title" and self._title is not None:
             self.titles.append(_text("".join(self._title)))
             self._title = None
@@ -203,6 +237,8 @@ class SourceHTML(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._inert_depth:
             return
+        if self._literal_text_tag in ("title", "textarea"):
+            data = unescape(data)
         if self._json is not None:
             self._json.append(data)
         if self._title is not None:
@@ -249,15 +285,9 @@ def _schema_summary(blocks: list[str]) -> dict:
             "eligibility_checked": False}
 
 
-def _noindex_sources(meta: list[dict], headers: dict) -> list[dict]:
-    sources = [{"source": f"meta:{item['agent']}", "value": item["content"]} for item in meta]
-    if headers.get("x-robots-tag"):
-        sources.append({"source": "http:x-robots-tag", "value": headers["x-robots-tag"]})
-    return [item for item in sources if re.search(r"\b(noindex|none)\b", item["value"], re.I)]
-
-
 def analyse_html(url: str, html: str, *, collected_at: str | None = None,
                  http_status: int | None = None, headers: dict | None = None,
+                 header_values: dict | None = None, decoding: dict | None = None,
                  requested_url: str | None = None, redirects: list | None = None,
                  source_bytes: int | None = None) -> tuple[dict, list[dict]]:
     """Pure analysis: no requests, DNS, disk writes, rendering or index assertions."""
@@ -284,15 +314,53 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
             links.add(normalise_url(href.strip() or base, base))
         except (FetchError, ValueError):
             invalid_links.append(href[:250])
+    header_links = link_header_evidence(headers, header_values)
+    header_link_issues = header_links["invalid"] + header_links["unassessed"]
+    if header_links["parsing_limited"]:
+        header_link_issues.append({"reason": "HTTP Link annotation parsing limit reached", "limit": header_links["annotation_limit"]})
+    canonical_sources = [{"href": href, "source": "html:link", "location": location, "base_url": base}
+                         for href, location in zip(parser.canonicals, parser.canonical_locations)]
+    canonical_sources.extend({"href": item["href"], "source": "http:link", "location": "http_header", "base_url": url}
+                             for item in header_links["links"] if "canonical" in item["relations"] and item["anchor"] is None and not item["malformed"])
     canonical: list[str] = []
     bad_canonical: list[str] = []
-    for value in parser.canonicals:
+    for declaration in canonical_sources:
+        value = declaration["href"]
         try:
             if not value.strip():
                 raise FetchError("invalid_url", "Empty canonical href.")
-            canonical.append(normalise_url(value, base))
+            resolved = normalise_url(value, declaration["base_url"])
+            declaration["resolved_url"] = resolved
+            if resolved not in canonical:
+                canonical.append(resolved)
         except FetchError:
             bad_canonical.append(value[:250])
+            declaration["resolved_url"] = None
+    hreflang_sources = list(parser.hreflang)
+    hreflang_sources.extend({"href": item["href"], "language": item["hreflang"], "source": "http:link", "location": "http_header"}
+                           for item in header_links["links"] if "alternate" in item["relations"] and item["hreflang"] is not None and item["anchor"] is None and not item["malformed"])
+    hreflang = []
+    hreflang_limited = parser.hreflang_extraction_limited or header_links["parsing_limited"] or len(hreflang_sources) > 200
+    for entry in hreflang_sources[:200]:
+        entry = {**entry, "language": entry["language"].strip().lower(), "issues": []}
+        language = entry["language"]
+        if language != "x-default" and not re.fullmatch(r"[a-z]{2}(?:-[a-z]{4})?(?:-[a-z]{2})?", language):
+            entry["issues"].append("unsupported_language_tag_shape")
+        if language.split("-")[-1] in ("uk", "eu", "un") and "-" in language:
+            entry["issues"].append("reserved_or_unsupported_region")
+        try:
+            parts = urlsplit(entry["href"])
+            if not parts.scheme or not parts.netloc:
+                entry["issues"].append("href_not_fully_qualified")
+            if parts.fragment:
+                entry["issues"].append("href_contains_fragment")
+            entry["url"] = normalise_url(entry["href"], base if entry["source"] == "html:link" else url)
+        except (FetchError, ValueError):
+            entry["issues"].append("invalid_href")
+            entry["url"] = None
+        if entry["location"] == "body":
+            entry["issues"].append("outside_source_head")
+        hreflang.append(entry)
     mixed: list[str] = []
     if urlsplit(url).scheme == "https":
         for value in parser.resources:
@@ -303,7 +371,8 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
             except FetchError:
                 pass
     schema = _schema_summary(parser.json_ld)
-    noindex = _noindex_sources(parser.robots, headers)
+    robots_policy = robots_evidence(parser.robots, headers, header_values)
+    noindex = robots_policy["noindex_observations"]
     source_text = _text(" ".join(parser.text_parts))
     page = {
         "url": url, "requested_url": requested_url or url, "http_status": http_status,
@@ -313,6 +382,10 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
         "meta_description": parser.descriptions[0] if parser.descriptions else None,
         "meta_descriptions": parser.descriptions, "robots": parser.robots,
         "x_robots_tag": headers.get("x-robots-tag"), "noindex_observations": noindex,
+        "robots_policy": robots_policy, "canonical_sources": canonical_sources,
+        "canonical_evidence_incomplete": bool(bad_canonical or header_link_issues),
+        "hreflang": hreflang, "hreflang_extraction_limited": hreflang_limited,
+        "header_link_errors": header_link_issues, "decoding": decoding,
         "canonical": canonical, "headings": parser.headings, "lang": parser.lang,
         "viewport": parser.viewport, "base_url": base, "links": sorted(links),
         "images": {"count": parser.image_count, "sampled": len(parser.images),
@@ -323,7 +396,7 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
         "content_sha256": hashlib.sha256(html.encode("utf-8")).hexdigest(),
         "source_text_word_count": len(source_text.split()),
         "script_count": parser.script_count, "discovered_link_count": parser.href_count,
-        "extraction_limited": parser.extraction_limited,
+        "extraction_limited": parser.extraction_limited or hreflang_limited or robots_policy["parsing_limited"],
         "links_extraction_limited": parser.links_extraction_limited,
         "images_extraction_limited": parser.images_extraction_limited,
         "question_heading_count": sum("?" in heading["text"] for heading in parser.headings),
@@ -355,23 +428,74 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
     add("description_present", "pass" if has_description else "warning", "low",
         "A meta description is present in source HTML." if has_description else "No nonempty meta description was found in source HTML.",
         "Consider a page-specific summary; Google may choose a different snippet and no fixed character length guarantees display.", "description", values=parser.descriptions)
-    add("canonical_present", "pass" if parser.canonicals else "warning", "low",
-        f"Source HTML contains {len(parser.canonicals)} canonical link element(s).",
-        "Review canonicalisation where duplicate URLs exist. A missing canonical tag alone does not prove an indexing problem.", "canonical", values=parser.canonicals)
+    add("canonical_present", "pass" if canonical_sources else "not_checked" if header_link_issues else "warning", "low",
+        f"Observed {len(parser.canonicals)} HTML canonical element(s) and {sum(item['source'] == 'http:link' for item in canonical_sources)} HTTP canonical annotation(s)."
+        + (" HTTP headers were not inspected." if not headers_were_supplied else ""),
+        "Review canonicalisation where duplicate URLs exist. A missing declaration alone does not prove an indexing problem.", "canonical", declarations=canonical_sources)
     add("canonical_single", "fail" if len(parser.canonicals) > 1 else "pass", "medium",
         f"Observed {len(parser.canonicals)} canonical link element(s).",
         "Use one consistent intended canonical declaration per document.", "canonical", values=parser.canonicals)
-    add("canonical_valid_url", "fail" if bad_canonical else ("pass" if parser.canonicals else "not_applicable"), "medium",
-        "Some canonical hrefs are empty, malformed or unsupported." if bad_canonical else "Canonical hrefs checked here resolve to HTTP(S) URLs." if parser.canonicals else "No canonical href is present to validate.",
+    add("canonical_valid_url", "fail" if bad_canonical else "not_checked" if header_link_issues else "pass" if canonical_sources else "not_applicable", "medium",
+        "Some canonical hrefs are empty, malformed or unsupported." if bad_canonical else "Canonical hrefs checked here resolve to HTTP(S) URLs." if canonical_sources else "No canonical href is present to validate.",
         "Use the intended canonical HTTP(S) URL and verify its response, index directives and content separately.", "canonical", invalid_values=bad_canonical, resolved_values=canonical)
     external_canonical = [item for item in canonical if origin(item) != origin(url)]
-    add("canonical_origin", "warning" if external_canonical else ("pass" if canonical else "not_applicable"), "medium",
+    add("canonical_origin", "warning" if external_canonical else "not_checked" if header_link_issues else "pass" if canonical else "not_applicable", "medium",
         "A canonical points to another origin." if external_canonical else "No cross-origin canonical was observed.",
         "Confirm whether cross-origin canonicalisation is intentional, for example for syndicated content; do not change it automatically.", "canonical", related_urls=external_canonical)
-    add("noindex_directive", "warning" if noindex else "pass", "medium",
-        ("A noindex/none directive was observed; intended indexing policy is not known." if noindex else
-         "No noindex/none directive was observed in inspected source meta tags" + (" or observed HTTP headers." if headers_were_supplied else ". HTTP response headers were not inspected.")),
-        "Confirm whether the page should be indexed before changing directives; source observations do not prove search-engine indexing status.", "index", directives=noindex, http_headers_checked=headers_were_supplied)
+    add("canonical_signal_consistency", "warning" if len(canonical) > 1 else "not_checked" if bad_canonical or header_link_issues else "pass" if canonical else "not_applicable", "medium",
+        f"Observed {len(canonical)} distinct resolved canonical destinations across HTML and HTTP headers.",
+        "Align intentional HTML/HTTP canonical signals after checking content equivalence; identical declarations across the two channels are not conflicting destinations.",
+        "canonical", related_urls=canonical, declarations=canonical_sources)
+    fragments = [item["href"] for item in canonical_sources if "#" in item["href"] and item.get("resolved_url")]
+    add("canonical_fragment", "warning" if fragments else "not_checked" if header_link_issues else "pass" if canonical_sources else "not_applicable", "low",
+        f"Observed {len(fragments)} canonical annotation(s) containing a fragment identifier.",
+        "Use the intended document URL without a fragment and verify the destination; Google generally does not support canonical fragments.", "canonical", values=fragments)
+    body_canonicals = [item for item in canonical_sources if item["location"] == "body"]
+    add("canonical_source_head", "warning" if body_canonicals else "pass" if parser.canonicals else "not_applicable", "medium",
+        f"Observed {len(body_canonicals)} canonical element(s) after an explicit source body tag; the browser DOM was not rendered.",
+        "Place the intended HTML canonical in a valid head and inspect rendered output. HTTP canonical annotations are a separate supported channel.", "canonical", declarations=body_canonicals)
+    googlebot_policy = robots_policy["by_agent"]["googlebot"]
+    add("canonical_noindex_conflict", "warning" if canonical and googlebot_policy["noindex"] else "not_checked" if header_link_issues or (canonical and not googlebot_policy["complete"]) else "pass" if canonical else "not_applicable", "medium",
+        "Canonical annotations coexist with a noindex/none directive applicable to Googlebot." if canonical and googlebot_policy["noindex"] else "No observed Googlebot noindex/canonical combination requires review in this source.",
+        "Confirm whether this URL should be excluded or consolidated into a canonical. Do not remove an intentional noindex directive automatically.",
+        "canonical", canonical=canonical, googlebot_noindex_sources=googlebot_policy["noindex_sources"])
+    robots_uncertain = robots_policy["parsing_limited"] or any(item["unrecognised"] for item in robots_policy["observations"])
+    add("noindex_directive", "warning" if noindex else "not_checked" if robots_uncertain else "pass", "medium",
+        ("A noindex/none directive was observed for the recorded crawler scope(s); intended indexing policy is not known." if noindex else
+         "No recognised noindex/none directive was observed in inspected source meta tags" + (" or observed HTTP headers." if headers_were_supplied else ". HTTP response headers were not inspected."))
+        + (" Directive evidence is incomplete or contains uninterpreted values." if robots_uncertain else ""),
+        "Confirm the intended policy for each recorded crawler before changing directives. Directive arguments such as max-image-preview:none are not noindex, and source observations do not prove indexing status.", "robots_meta", directives=noindex, http_headers_checked=headers_were_supplied, parsing_limited=robots_policy["parsing_limited"])
+    conflicts = {agent: item["conflicts"] for agent, item in robots_policy["by_agent"].items() if item["conflicts"]}
+    add("robots_directive_conflicts", "warning" if conflicts else "not_checked" if robots_uncertain else "pass", "low",
+        f"Observed conflicting explicit index/follow preferences for {len(conflicts)} crawler scope(s).",
+        "Review duplicated CMS/server directives and preserve the intended restrictive policy. Google applies the more restrictive applicable rule.",
+        "robots_meta", crawler_conflicts=conflicts)
+    unknown_directives = [item for item in robots_policy["observations"] if item["unrecognised"]]
+    add("robots_directives_review", "warning" if unknown_directives else "not_checked" if robots_policy["parsing_limited"] else "pass", "low",
+        f"{len(unknown_directives)} robots declaration(s) contain values this parser does not interpret.",
+        "Check the exact crawler's documentation before changing unfamiliar values; unsupported or malformed values do not establish an indexing block.",
+        "robots_meta", unrecognised_declarations=unknown_directives, parsing_limited=robots_policy["parsing_limited"])
+    hreflang_problems = [item for item in hreflang if item["issues"]]
+    add("hreflang_syntax", "warning" if hreflang_problems else "not_checked" if hreflang_limited or header_link_issues else "pass" if hreflang else "not_applicable", "low",
+        f"Inspected {len(hreflang)} HTML/HTTP hreflang declaration(s); {len(hreflang_problems)} have observable URL, tag-shape or source-placement issues. Full ISO registry and content-language validation were not performed.",
+        "Use fully qualified URLs, supported language/script/region codes and head placement for HTML links; hreflang is optional when no language or regional variants exist.",
+        "hreflang", declarations=hreflang_problems, extraction_limited=hreflang_limited, registry_codes_validated=False)
+    by_language: dict[str, set[str]] = defaultdict(set)
+    for entry in hreflang:
+        if entry["url"]:
+            by_language[entry["language"]].add(entry["url"])
+    hreflang_conflicts = {language: sorted(urls) for language, urls in by_language.items() if len(urls) > 1}
+    add("hreflang_language_conflicts", "warning" if hreflang_conflicts else "not_checked" if hreflang_limited or hreflang_problems or header_link_issues else "pass" if hreflang else "not_applicable", "low",
+        f"Observed {len(hreflang_conflicts)} hreflang code(s) pointing to different destinations in this source.",
+        "Choose one intended destination per language/region code and keep the set consistent across variants.", "hreflang", language_destinations=hreflang_conflicts)
+    hreflang_self = any(item["url"] == url and not item["issues"] for item in hreflang)
+    add("hreflang_self_reference", "pass" if hreflang_self else "not_checked" if hreflang_limited or hreflang_problems or header_link_issues else "warning" if hreflang else "not_applicable", "low",
+        "A valid source hreflang declaration points to this URL." if hreflang_self else "No valid self-reference was observed in the inspected HTML/HTTP hreflang declarations.",
+        "When implementing hreflang, include the current language variant alongside the alternate versions; sitemap annotations and rendered additions require separate verification.", "hreflang", declarations=hreflang, extraction_limited=hreflang_limited)
+    if decoding is not None:
+        add("html_decoding", "warning" if decoding["had_errors"] or decoding["unsupported_declarations"] else "pass", "low",
+            f"Decoded source as {decoding['encoding']} using {decoding['source']} evidence; decoding errors: {decoding['had_errors']}.",
+            "Use a supported, consistent encoding and verify the rendered text. An undeclared UTF-8 fallback is the auditor's default, not a measured browser choice.", "encoding", **decoding)
     add("html_lang", "pass" if parser.lang.strip() else "warning", "low",
         f"The source html lang value is {parser.lang!r}.",
         "Set a correct document language for assistive technology; confirm the actual language and translations.", lang=parser.lang)
@@ -418,7 +542,10 @@ def _is_html(headers: dict, body: bytes) -> bool:
     content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type in ("text/html", "application/xhtml+xml"):
         return True
-    return not content_type and bool(re.search(br"<(?:!doctype\s+html|html|head|body)\b", body[:1024], re.I))
+    if content_type:
+        return False
+    preview, _diagnostics = decode_html(body[:4096], headers)
+    return bool(re.search(r"<(?:!doctype\s+html|html|head|body)\b", preview[:1024], re.I))
 
 
 def _base_report(target: str, mode: str, limits: dict) -> dict:
@@ -434,20 +561,22 @@ def _base_report(target: str, mode: str, limits: dict) -> dict:
 
 
 def _record_duplicates(report: dict) -> None:
+    decoding_unknown = sorted(page["url"] for page in report["pages"] if page.get("decoding") and
+                              (page["decoding"]["had_errors"] or page["decoding"]["unsupported_declarations"]))
     for field, rule, reference in (("title", "duplicate_title", "title"), ("meta_description", "duplicate_description", "description")):
         groups: dict[str, list[str]] = defaultdict(list)
         for page in report["pages"]:
-            if page.get(field):
+            if page.get(field) and page["url"] not in decoding_unknown:
                 groups[_text(page[field]).casefold()].append(page["url"])
         for page in report["pages"]:
             value = page.get(field)
             if value is None:
                 continue
             related = sorted(set(groups[_text(value).casefold()]) - {page["url"]})
-            report["findings"].append(finding(rule, page["url"], "warning" if related else "pass", "low",
+            report["findings"].append(finding(rule, page["url"], "warning" if related else "not_checked" if decoding_unknown else "pass", "low",
                 f"This {field} exactly matches {len(related)} other URL(s) in the inspected sample; unvisited pages are unknown.",
                 "Review whether these pages need different summaries/titles or intentional canonicalisation; do not infer keyword cannibalisation from this check.",
-                collected_at=page["fetched_at"], reference=reference, related_urls=related, value=value,
+                collected_at=page["fetched_at"], reference=reference, related_urls=related, value=value, unverified_decoding_urls=decoding_unknown,
                 comparison_scope_urls=sorted(item["url"] for item in report["pages"])))
 
 
@@ -462,7 +591,8 @@ def _record_destination_checks(report: dict) -> None:
     for page in report["pages"]:
         for category, targets in (
             ("internal_link", sorted({url for url in page["links"] if origin(url) == origin(report["target"])})),
-            ("canonical", page["canonical"])):
+            ("canonical", page["canonical"]),
+            ("hreflang", sorted({item["url"] for item in page.get("hreflang", []) if item["url"] and not item["issues"]}))):
             observations, unknown, issues = [], [], []
             for target in targets:
                 response = responses.get(target)
@@ -476,11 +606,14 @@ def _record_destination_checks(report: dict) -> None:
                 observations.append(item)
                 if not 200 <= response["http_status"] < 300 or response["redirects"]:
                     issues.append(target)
-            incomplete_links = category == "internal_link" and page.get("links_extraction_limited", page.get("extraction_limited", False))
+            incomplete_links = ((category == "internal_link" and page.get("links_extraction_limited", page.get("extraction_limited", False)))
+                                or (category == "hreflang" and (page.get("hreflang_extraction_limited", False) or any(item["issues"] for item in page.get("hreflang", []))))
+                                or (category == "canonical" and page.get("canonical_evidence_incomplete", False))
+                                or (category in ("canonical", "hreflang") and bool(page.get("header_link_errors"))))
             status = "warning" if issues else "not_checked" if unknown or incomplete_links else "pass" if targets else "not_applicable"
             report["findings"].append(finding(f"{category}_target_response", page["url"], status, "medium" if category == "canonical" else "low",
                 f"Observed {len(observations)} of {len(targets)} retained {category.replace('_', ' ')} destination response(s); {len(issues)} returned a non-success status or redirects. {len(unknown)} retained destinations remain unverified."
-                + (" Hyperlink extraction was incomplete; omitted destinations remain unknown." if incomplete_links else ""),
+                + (" Source link/annotation evidence was incomplete; omitted destinations remain unknown." if incomplete_links else ""),
                 "Review observed failures and link directly to intended final URLs. Unvisited, off-origin and access-limited targets remain unknown.",
                 collected_at=page["fetched_at"], reference="canonical" if category == "canonical" else "http",
                 related_urls=sorted(set(issues)), unverified_urls=sorted(set(unknown)), destination_observations=observations,
@@ -492,20 +625,53 @@ def _record_destination_checks(report: dict) -> None:
             if destination is None:
                 unchecked.append(target)
             else:
-                checked.append(target)
-                if destination["noindex_observations"]:
-                    noindex_targets.append({"url": target, "directives": destination["noindex_observations"]})
+                target_policy = destination["robots_policy"]["by_agent"]["googlebot"]
+                applicable_noindex = target_policy["noindex_sources"]
+                if applicable_noindex:
+                    noindex_targets.append({"url": target, "directives": applicable_noindex})
+                elif not target_policy["complete"]:
+                    unchecked.append(target)
+                else:
+                    checked.append(target)
         report["findings"].append(finding("canonical_target_noindex", page["url"],
-            "warning" if noindex_targets else "not_checked" if unchecked else "pass" if checked else "not_applicable", "medium",
-            f"Found noindex/none directives at {len(noindex_targets)} observed canonical destination(s); {len(unchecked)} destinations remain unverified.",
+            "warning" if noindex_targets else "not_checked" if unchecked or page.get("canonical_evidence_incomplete") else "pass" if checked else "not_applicable", "medium",
+            f"Found noindex/none directives applicable to Googlebot at {len(noindex_targets)} observed canonical destination(s); {len(unchecked)} destinations remain unverified.",
             "Confirm the intended canonical and indexing policy before changing either. These directives do not establish actual index membership.",
             collected_at=page["fetched_at"], reference="canonical", related_urls=[item["url"] for item in noindex_targets],
             target_directives=noindex_targets, unverified_urls=unchecked))
 
 
+def _record_hreflang_return_links(report: dict) -> None:
+    pages = {page["url"]: page for page in report["pages"]}
+    for page in report["pages"]:
+        declared = page.get("hreflang", [])
+        targets = sorted({entry["url"] for entry in declared if entry["url"] and not entry["issues"] and entry["url"] != page["url"]})
+        missing, unknown, checked = [], [], []
+        for target in targets:
+            alternate = pages.get(target)
+            if alternate is None or alternate.get("http_status") != 200:
+                unknown.append(target)
+                continue
+            reverse = [entry for entry in alternate.get("hreflang", []) if entry["url"] == page["url"] and not entry["issues"]]
+            if reverse:
+                checked.append(target)
+            elif alternate.get("hreflang_extraction_limited") or alternate.get("header_link_errors") or any(entry["issues"] for entry in alternate.get("hreflang", [])):
+                unknown.append(target)
+            else:
+                missing.append(target)
+        incomplete = page.get("hreflang_extraction_limited") or page.get("header_link_errors") or any(entry["issues"] for entry in declared)
+        status = "warning" if missing else "not_checked" if unknown or incomplete else "pass" if declared else "not_applicable"
+        report["findings"].append(finding("hreflang_return_links", page["url"], status, "low",
+            f"Observed {len(checked)} reciprocal HTML/HTTP annotation(s), {len(missing)} fetched variant(s) without an observed return link, and {len(unknown)} unverified destination(s). Sitemap annotations were not evaluated.",
+            "Verify reciprocal annotations for each intended language variant, including any sitemap implementation. An unvisited or externally hosted variant is not a proven missing return link.",
+            collected_at=page["fetched_at"], reference="hreflang", related_urls=missing,
+            unverified_urls=unknown, verified_return_urls=checked, extraction_limited=bool(incomplete)))
+
+
 def _finish(report: dict) -> dict:
     _record_duplicates(report)
     _record_destination_checks(report)
+    _record_hreflang_return_links(report)
     report["pages"].sort(key=lambda page: (page["url"], page["requested_url"]))
     report["findings"].sort(key=lambda item: (item["url"], item["rule_id"]))
     report["coverage"]["discovered_urls"] = sorted(set(report["coverage"]["discovered_urls"]))
@@ -523,7 +689,8 @@ def audit_offline(path: Path, target: str, *, max_bytes: int = 2_000_000) -> dic
         body = source.read(max_bytes + 1)
     if len(body) > max_bytes:
         raise FetchError("response_too_large", "Saved HTML exceeds --max-bytes; no partial HTML was analysed.")
-    page, findings = analyse_html(target, _decode(body, {}), collected_at=report["collected_at"], source_bytes=len(body))
+    html, decoding = decode_html(body, {})
+    page, findings = analyse_html(target, html, collected_at=report["collected_at"], source_bytes=len(body), decoding=decoding)
     page["source_file"] = str(path.resolve())
     report["pages"].append(page)
     report["findings"].extend(findings)
@@ -711,8 +878,10 @@ def audit_live(target: str, *, max_pages: int = 30, max_depth: int = 3,
                         f"Observed HTTP {response.status}; the response was not HTML and no HTML checks were performed.",
                         "Check whether this URL is intended to be a public HTML page.", collected_at=when, reference="http", http_status=response.status))
                     continue
-                page, findings = analyse_html(response.url, _decode(response.body, response.headers),
+                html, decoding = decode_html(response.body, response.headers)
+                page, findings = analyse_html(response.url, html,
                     collected_at=when, http_status=response.status, headers=response.headers,
+                    header_values=response.header_values, decoding=decoding,
                     requested_url=url, redirects=response.redirects, source_bytes=len(response.body))
                 page["depth"] = depth
                 page["in_inspected_sitemap"] = url in sitemap_urls
@@ -725,8 +894,8 @@ def audit_live(target: str, *, max_pages: int = 30, max_depth: int = 3,
                         ("sitemap_url_response", "pass" if response.status == 200 and not response.redirects else "warning",
                          f"Inspected sitemap lists this URL; its final status is {response.status} with {len(response.redirects)} redirect(s).",
                          "List the intended canonical, successful public URL directly in the sitemap."),
-                        ("sitemap_url_noindex", "warning" if page["noindex_observations"] else "pass",
-                         "A sitemap URL has a noindex/none directive." if page["noindex_observations"] else "No noindex/none directive was observed for this inspected sitemap URL.",
+                        ("sitemap_url_noindex", "warning" if page["robots_policy"]["by_agent"]["googlebot"]["noindex"] else "not_checked" if not page["robots_policy"]["by_agent"]["googlebot"]["complete"] else "pass",
+                         "A sitemap URL has a noindex/none directive applicable to Googlebot." if page["robots_policy"]["by_agent"]["googlebot"]["noindex"] else "No noindex/none directive applicable to Googlebot was observed for this inspected sitemap URL.",
                          "Align sitemap membership with the intended indexing policy; do not remove intentional noindex automatically."),
                         ("sitemap_url_canonical", "warning" if page["canonical"] and response.url not in page["canonical"] else "pass" if page["canonical"] else "not_applicable",
                          "Compared source canonical declarations with this inspected sitemap URL.",
@@ -734,7 +903,8 @@ def audit_live(target: str, *, max_pages: int = 30, max_depth: int = 3,
                         report["findings"].append(finding(rule, response.url, status, "low", observation, recommendation,
                             collected_at=when, reference="sitemap", canonical=page["canonical"], requested_url=url))
                 if 200 <= response.status < 300:
-                    for link in sorted(set(page["links"] + page["canonical"])):
+                    alternate_urls = [entry["url"] for entry in page["hreflang"] if entry["url"] and not entry["issues"]]
+                    for link in sorted(set(page["links"] + page["canonical"] + alternate_urls)):
                         if origin(link) == client.scope and link not in discovered:
                             discovered.add(link)
                             pending.append((link, depth + 1))
@@ -801,10 +971,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-seconds", type=_bounded_float(0.1, 3600), default=120.0)
     parser.add_argument("--allow-localhost", action="store_true", help="Explicitly allow localhost and literal loopback targets only; never other private networks.")
     parser.add_argument("--compare", type=Path, help="Prior compatible audit.json; missing coverage is never proof of resolution.")
+    parser.add_argument("--performance-json", type=Path, action="append", default=[],
+                        help="Local Lighthouse/PageSpeed/CrUX JSON evidence; repeat for multiple exports. Validated before crawling.")
     parser.add_argument("--version", action="version", version=TOOL_VERSION)
     args = parser.parse_args(argv)
     try:
         target = normalise_url(args.url)
+        measurements = None
+        if args.performance_json:
+            from measurements import load_performance_evidence
+            measurements = load_performance_evidence(args.performance_json, target)
         if args.html:
             report = audit_offline(args.html, target, max_bytes=args.max_bytes)
         else:
@@ -812,6 +988,8 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout, delay=args.delay, max_bytes=args.max_bytes,
                 max_requests=args.max_requests, max_total_bytes=args.max_total_bytes,
                 max_seconds=args.max_seconds, allow_localhost=args.allow_localhost)
+        if measurements is not None:
+            report["measurements"] = measurements
         # Imported only on the CLI output path; analyse_html stays a pure helper.
         from reporting import write_reports
         write_reports(report, args.output, args.compare)

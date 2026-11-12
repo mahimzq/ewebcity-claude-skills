@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
-USER_AGENT = "EWebCitySEO/2.0 (+https://ewebcity.co.uk)"
+USER_AGENT = "EWebCitySEO/2.1 (+https://ewebcity.co.uk)"
 PRODUCT_TOKEN = "EWebCitySEO"
 
 
@@ -227,6 +227,9 @@ class Response:
     headers: dict[str, str]
     body: bytes
     redirects: list[dict] = field(default_factory=list)
+    # Repeated fields carry semantic boundaries (notably X-Robots-Tag).
+    # Keep the legacy flattened view for callers that only need one value.
+    header_values: dict[str, list[str]] = field(default_factory=dict)
 
 
 class SafeClient:
@@ -286,8 +289,10 @@ class SafeClient:
             })
             response = connection.getresponse()
             headers: dict[str, str] = {}
+            header_values: dict[str, list[str]] = {}
             for key, value in response.getheaders():
                 key = key.lower()
+                header_values.setdefault(key, []).append(value)
                 headers[key] = f"{headers[key]}, {value}" if key in headers else value
             # Never decompress arbitrary responses: a compressed body can expand
             # beyond its advertised transfer size and bypass the memory budget.
@@ -307,7 +312,7 @@ class SafeClient:
                     if remaining_bytes <= self.max_bytes:
                         raise BudgetExceeded("byte_budget", "Audit byte budget exhausted while reading a response.")
                     raise FetchError("response_too_large", "Response exceeded the per-response byte limit; it was not analysed.")
-            return Response(url, url, response.status, headers, bytes(body))
+            return Response(url, url, response.status, headers, bytes(body), header_values=header_values)
         except FetchError:
             raise
         except (OSError, http.client.HTTPException, ValueError) as exc:

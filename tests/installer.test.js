@@ -9,6 +9,7 @@ const { spawnSync } = require("node:child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const INSTALLER = path.join(ROOT, "bin", "install.js");
+const { destinationLayout } = require(INSTALLER);
 const SEO = "ewebcity-seo-optimizer";
 const FULLSTACK = "ewebcity-fullstack-engineer";
 
@@ -183,4 +184,179 @@ test("refuses a file in destination ancestry without altering it", (t) => {
   fs.writeFileSync(path.join(directory, ".claude"), "Unrelated file");
   fails(run(directory, [SEO]), /Expected a directory/);
   assert.equal(fs.readFileSync(path.join(directory, ".claude"), "utf8"), "Unrelated file");
+});
+
+const NATIVE_TARGETS = [
+  { target: "claude", projectRoot: ".claude", personalRoot: ".claude" },
+  { target: "codex", projectRoot: ".agents", personalRoot: ".agents" },
+  { target: "cursor", projectRoot: ".cursor", personalRoot: ".cursor" },
+  { target: "copilot", projectRoot: ".github", personalRoot: ".copilot" },
+  { target: "antigravity", projectRoot: ".agents", personalRoot: path.join(".gemini", "config") },
+];
+
+for (const { target, projectRoot, personalRoot } of NATIVE_TARGETS) {
+  test(`--target ${target} installs only in its documented project location`, (t) => {
+    const directory = project(t);
+    succeeds(run(directory, [SEO, "--target", target]));
+    const destination = path.join(directory, projectRoot, "skills", SEO);
+    assert.equal(fs.readFileSync(path.join(destination, "SKILL.md"), "utf8"),
+      fs.readFileSync(path.join(ROOT, "skills", SEO, "SKILL.md"), "utf8"));
+    assert.equal(fs.existsSync(path.join(destination, "scripts", "audit.py")), true);
+    assert.equal(fs.existsSync(path.join(destination, "PORTABLE_PROMPT.md")), false);
+    assert.deepEqual(fs.readdirSync(directory), [projectRoot]);
+    assert.deepEqual(fs.readdirSync(path.join(directory, projectRoot, "skills")), [SEO]);
+    assert.equal(fs.existsSync(path.join(directory, projectRoot, "ewebcity-staging")), false);
+  });
+
+  test(`${target} personal destination stays inside the supplied home anchor`, (t) => {
+    // Exercise path selection with a temporary anchor; never install into a real
+    // account or change HOME/CODEX_HOME to test personal configuration.
+    const directory = project(t);
+    const layout = destinationLayout(directory, { target, project: false });
+    const expectedRoot = path.join(directory, personalRoot);
+    assert.equal(layout.skillsRoot, path.join(expectedRoot, "skills"));
+    assert.equal(layout.backupRoot, path.join(expectedRoot, "ewebcity-backups"));
+    assert.equal(layout.stagingRoot, path.join(expectedRoot, "ewebcity-staging"));
+    assert.deepEqual(fs.readdirSync(directory), []);
+  });
+}
+
+for (const args of [
+  ["--target"],
+  ["--target", "--force"],
+  ["--target="],
+  ["--target", "unknown-platform"],
+  ["--target", "../../escape"],
+  ["--target", "__proto__"],
+  ["--target", "cursor", "--target", "claude"],
+]) {
+  test(`invalid target arguments fail without writes: ${args.join(" ")}`, (t) => {
+    const directory = project(t);
+    fails(run(directory, [SEO, ...args]), /target/i);
+    assert.deepEqual(fs.readdirSync(directory), []);
+  });
+}
+
+test("--target=vscode selects Copilot and keeps unrelated settings", (t) => {
+  const directory = project(t);
+  fs.mkdirSync(path.join(directory, ".github"));
+  fs.writeFileSync(path.join(directory, ".github", "copilot-instructions.md"), "My repository instructions");
+  succeeds(run(directory, [SEO, "--target=vscode"]));
+  assert.equal(fs.existsSync(path.join(directory, ".github", "skills", SEO, "SKILL.md")), true);
+  assert.equal(fs.readFileSync(path.join(directory, ".github", "copilot-instructions.md"), "utf8"), "My repository instructions");
+  assert.deepEqual(fs.readdirSync(directory), [".github"]);
+});
+
+test("updating Cursor leaves an existing Claude copy unchanged", (t) => {
+  const directory = project(t);
+  succeeds(run(directory, [SEO]));
+  const claudeSkill = path.join(installed(directory), "SKILL.md");
+  fs.writeFileSync(claudeSkill, "Independent Claude customisation");
+  succeeds(run(directory, [SEO, "--target", "cursor"]));
+  const cursorSkill = path.join(directory, ".cursor", "skills", SEO, "SKILL.md");
+  fs.writeFileSync(cursorSkill, "Previous Cursor customisation");
+  succeeds(run(directory, [SEO, "--target", "cursor", "--force"]));
+  assert.equal(fs.readFileSync(claudeSkill, "utf8"), "Independent Claude customisation");
+  assert.equal(fs.existsSync(path.join(directory, ".claude", "ewebcity-backups")), false);
+  const backupRoot = path.join(directory, ".cursor", "ewebcity-backups");
+  const backups = fs.readdirSync(backupRoot);
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(backupRoot, backups[0], SEO, "SKILL.md"), "utf8"), "Previous Cursor customisation");
+});
+
+test("Codex and Antigravity share one protected project copy and backup root", (t) => {
+  const directory = project(t);
+  succeeds(run(directory, [SEO, "--target", "codex"]));
+  const shared = path.join(directory, ".agents", "skills", SEO);
+  fs.writeFileSync(path.join(shared, "SKILL.md"), "Shared local instructions");
+  fs.writeFileSync(path.join(shared, "stale.txt"), "Stale shared resource");
+  fails(run(directory, [SEO, "--target", "antigravity"]), /already exists/);
+  assert.equal(fs.readFileSync(path.join(shared, "SKILL.md"), "utf8"), "Shared local instructions");
+  succeeds(run(directory, [SEO, "--target", "antigravity", "--force"]));
+  assert.equal(fs.existsSync(path.join(shared, "stale.txt")), false);
+  assert.deepEqual(fs.readdirSync(path.join(directory, ".agents", "skills")), [SEO]);
+  assert.deepEqual(fs.readdirSync(directory), [".agents"]);
+  const backupRoot = path.join(directory, ".agents", "ewebcity-backups");
+  const backups = fs.readdirSync(backupRoot);
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(backupRoot, backups[0], SEO, "SKILL.md"), "utf8"), "Shared local instructions");
+});
+
+for (const { target, relative } of [
+  { target: "codex", relative: ".agents" },
+  { target: "cursor", relative: ".cursor/skills" },
+  { target: "copilot", relative: `.github/skills/${SEO}` },
+  { target: "antigravity", relative: ".agents/ewebcity-staging" },
+  { target: "portable", relative: "ewebcity-portable" },
+]) {
+  test(`${target} rejects a redirected destination at ${relative}`, (t) => {
+    const directory = project(t);
+    const outside = path.join(directory, "outside");
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, "keep.txt"), "Unrelated content");
+    const link = path.join(directory, relative);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    if (!makeLink(t, outside, link)) return;
+    fails(run(directory, [SEO, "--target", target, "--force"]), /symbolic link/);
+    assert.deepEqual(fs.readdirSync(outside), ["keep.txt"]);
+    assert.equal(fs.readFileSync(path.join(outside, "keep.txt"), "utf8"), "Unrelated content");
+  });
+}
+
+for (const target of ["codex", "cursor", "copilot", "antigravity", "portable"]) {
+  test(`${target} dry run creates no directories`, (t) => {
+    const directory = project(t);
+    const result = run(directory, [SEO, "--target", target, "--dry-run"]);
+    succeeds(result);
+    assert.match(result.stdout, /Dry run: no files changed/);
+    assert.deepEqual(fs.readdirSync(directory), []);
+  });
+}
+
+for (const target of ["portable", "chatgpt", "deepseek"]) {
+  test(`${target} exports a complete bundle and compact prompt in the current directory`, (t) => {
+    const directory = project(t);
+    // Deliberately omit --project: portable aliases must still use this temporary
+    // working directory, never the user's personal application folders.
+    const result = spawnSync(process.execPath, [INSTALLER, SEO, "--target", target], {
+      cwd: directory, encoding: "utf8", timeout: 20000,
+    });
+    succeeds(result);
+    assert.match(result.stdout, /Export only/);
+    assert.deepEqual(fs.readdirSync(directory), ["ewebcity-portable"]);
+    const bundle = path.join(directory, "ewebcity-portable", "skills", SEO);
+    const source = path.join(ROOT, "skills", SEO);
+    const prompt = fs.readFileSync(path.join(bundle, "PORTABLE_PROMPT.md"), "utf8");
+    assert.ok(prompt.includes(fs.readFileSync(path.join(source, "SKILL.md"), "utf8")));
+    assert.match(prompt, /does not register an application integration/);
+    assert.match(prompt, /mark the affected checks not checked/);
+    assert.match(prompt, /references\/technical-seo\.md/);
+    assert.ok(!prompt.includes(fs.readFileSync(path.join(source, "references", "technical-seo.md"), "utf8")),
+      "Reference corpus should remain in separate files, with a compact prompt index");
+    assert.equal(fs.readFileSync(path.join(bundle, "references", "technical-seo.md"), "utf8"),
+      fs.readFileSync(path.join(source, "references", "technical-seo.md"), "utf8"));
+    assert.equal(fs.readFileSync(path.join(bundle, "scripts", "audit.py"), "utf8"),
+      fs.readFileSync(path.join(source, "scripts", "audit.py"), "utf8"));
+    const bootstrap = path.join(source, "assets", "portable-prompt.md");
+    if (fs.existsSync(bootstrap)) assert.ok(prompt.includes(fs.readFileSync(bootstrap, "utf8")));
+  });
+}
+
+test("portable aliases preserve prior exports and require --force for replacement", (t) => {
+  const directory = project(t);
+  succeeds(run(directory, [SEO, "--target", "chatgpt"]));
+  const bundle = path.join(directory, "ewebcity-portable", "skills", SEO);
+  fs.writeFileSync(path.join(bundle, "PORTABLE_PROMPT.md"), "My adapted prompt");
+  fs.writeFileSync(path.join(bundle, "stale.txt"), "Local note");
+  fails(run(directory, [SEO, "--target", "deepseek"]), /already exists/);
+  assert.equal(fs.readFileSync(path.join(bundle, "PORTABLE_PROMPT.md"), "utf8"), "My adapted prompt");
+  succeeds(run(directory, [SEO, "--target", "portable", "--force", "--dry-run"]));
+  assert.equal(fs.readFileSync(path.join(bundle, "PORTABLE_PROMPT.md"), "utf8"), "My adapted prompt");
+  succeeds(run(directory, [SEO, "--target", "deepseek", "--force"]));
+  assert.equal(fs.existsSync(path.join(bundle, "stale.txt")), false);
+  const backupRoot = path.join(directory, "ewebcity-portable", "ewebcity-backups");
+  const backups = fs.readdirSync(backupRoot);
+  assert.equal(backups.length, 1);
+  assert.equal(fs.readFileSync(path.join(backupRoot, backups[0], SEO, "PORTABLE_PROMPT.md"), "utf8"), "My adapted prompt");
+  assert.equal(fs.readFileSync(path.join(backupRoot, backups[0], SEO, "stale.txt"), "utf8"), "Local note");
 });
