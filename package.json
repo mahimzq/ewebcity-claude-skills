@@ -1,9 +1,10 @@
 {
   "name": "ewebcity-claude-skills",
-  "version": "1.0.0",
-  "description": "eWebCity.co.uk Claude skills: safe full-stack engineering workflow and complete website SEO/AEO/GEO + performance audit-and-fix. Install into Claude Code with one npx command.",
+  "version": "2.0.0",
+  "description": "eWebCity Claude skills with evidence-based SEO/AEO/GEO workflows, a bounded source-HTML audit CLI, verifiable reports and safe skill updates.",
   "bin": {
-    "ewebcity-claude-skills": "bin/install.js"
+    "ewebcity-claude-skills": "bin/install.js",
+    "ewebcity-seo-audit": "bin/audit.js"
   },
   "files": [
     "bin",
@@ -32,5 +33,13 @@
   "license": "MIT",
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "test": "npm run test:node && npm run test:python",
+    "test:installer": "node --test tests/installer.test.js",
+    "test:python": "python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "audit:seo": "node bin/audit.js",
+    "check": "node --check bin/install.js && node --check bin/audit.js",
+    "test:node": "node --test tests/installer.test.js tests/launcher.test.js"
   }
 }

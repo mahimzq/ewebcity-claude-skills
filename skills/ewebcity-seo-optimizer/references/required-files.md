@@ -1,96 +1,61 @@
-# Required Site Files — Generation Rules and Templates
+# Site Files: Applicability and Generation
 
-Check for each file; generate any that are missing. Place at the site root (or the framework's static/public directory: `public/` in Next.js/Vite/Laravel, the static config in Django). Replace ALL_CAPS placeholders with real values from the site/repo — never ship placeholder text without flagging it.
+Guidance checked: **2026-11-12**. The filename is retained for compatibility; these files are **conditional**, not a mandatory SEO bundle. Inspect existing generated routes, CMS/plugin output and hosting configuration before creating or replacing anything.
+
+| File/configuration | When useful | Required inputs |
+| --- | --- | --- |
+| `robots.txt` | An intended crawler policy or sitemap discovery declaration. Absence alone is not an indexing failure. | Exact origin, current rules, relevant paths and known owner preferences. |
+| XML sitemap/index | Discovery of canonical public URLs, particularly larger or changing sites. | Verified URL inventory, canonical decisions and trustworthy change dates if available. |
+| `llms.txt` | Optional interoperability for an identified consumer or an explicitly requested experiment. | Verified public summary, real links and accurate descriptions. |
+| Web app manifest | Product requirements for an installable web app; not a generic SEO repair. | Real app name, scope/start URL and existing usable icons. |
+| Favicons/social images | Branding, browser UI and sharing previews. | Real image files and verified asset paths. |
+| `security.txt` | An established vulnerability-reporting process. | A working reporting contact and a maintained expiry date. |
+| Search verification files/tags | The chosen provider's actual ownership-verification step. | The exact provider-issued token or file and authority to make that change. |
+| Advertising files | A real advertising integration requiring them. | The provider's actual authorised seller/app records. |
+
+## Rules for every generated output
+
+- Use the framework's existing mechanism and conventions. Do not add a dependency, duplicate a dynamic route with a static file, or overwrite plugin-managed output without understanding ownership.
+- Write deployable files only with resolved values. Keep examples and unresolved questions in the report; never ship `DOMAIN`, `SITE_NAME`, `PASTE_CODE_HERE`, invented dates or links to nonexistent icons.
+- Preserve the user's existing policy and unrelated content. Apply changes within the authorisation already given; prepare a focused diff and validation result. Publication and production configuration changes require matching scope, not a new blanket confirmation for every edit.
+- Distinguish generated locally, validated locally, deployed and observed live. A local file's presence does not prove the live site serves it.
 
 ## robots.txt
 
-```
-User-agent: *
-Allow: /
+Read and parse the existing file first. Test effective rules against representative public pages, assets and intentionally restricted paths for each relevant crawler. User-agent-specific groups can have a different outcome from the wildcard group.
 
-# Block genuinely private/duplicate areas only — never block CSS/JS
-Disallow: /admin/
-Disallow: /cart/
-Disallow: /*?sort=
+Do not insert guessed `/admin/`, cart, query-string or asset blocks. Robots rules do not protect private content, implement `noindex` or choose canonical URLs. Authentication is required for private data; intentional exclusions need to remain intact.
 
-# AI crawlers — allowed by default for GEO visibility (confirm with user)
-User-agent: GPTBot
-Allow: /
-User-agent: ClaudeBot
-Allow: /
-User-agent: PerplexityBot
-Allow: /
+Add a `Sitemap:` declaration only for a resolved sitemap URL. Do not add AI-specific allow rules by default: search and training controls are independent (see `aeo-geo.md`). Record an unspecified policy as a decision, then continue other authorised work.
 
-Sitemap: https://DOMAIN/sitemap.xml
-```
+## XML sitemaps
 
-Rules: never `Disallow: /` on a public site; never block asset directories (Google must render the page); only disallow paths that actually exist.
+1. Combine discovered URLs with any authorised route/CMS inventory. Preserve case, significant query parameters and language variants; do not mechanically rewrite URLs.
+2. Include intended public canonical URLs with observed successful responses and no conflicting exclusion. For undeployed routes, label live verification pending. Exclude redirects, known errors and unintended duplicate/noindex URLs.
+3. Serialize XML using an XML library, UTF-8 and correct escaping. Validate namespace, absolute URLs, duplicates and host scope.
+4. Use `lastmod` only when the underlying content's meaningful modification date is known. Do not stamp the audit date on every URL. Google ignores sitemap `priority` and `changefreq`; they are not score improvements.
+5. Split at **50,000 URLs or 50 MB uncompressed**, whichever comes first, and generate a sitemap index when needed. Preserve existing image/video/news extensions when applicable.
+6. Re-fetch deployed files if deployment is in scope. A submitted or valid sitemap does not guarantee indexing.
 
-## sitemap.xml
+Prefer the site's established dynamic generator for changing content. Inspect framework versions and project dependencies before choosing an implementation.
 
-Build from real discovered routes — only canonical, indexable, 200-status URLs. Exclude redirects, noindex pages, and parameter variants.
+## Optional supporting files
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://DOMAIN/</loc>
-    <lastmod>YYYY-MM-DD</lastmod>
-  </url>
-</urlset>
-```
+- **llms.txt:** use verified public site identity and canonical page links. Label its purpose; give it no Google-ranking weight. Do not assert that any provider consumes it without evidence.
+- **Manifest/icons:** verify every referenced asset's existence, format and size. Do not manufacture icon references or change installability/display behaviour merely to satisfy an SEO checklist.
+- **security.txt:** use `/.well-known/security.txt` only with a real maintained process. Omit the file when the contact or expiry cannot be established.
+- **Advertising files:** take records from the actual advertising provider; do not invent seller IDs or assume an ad-supported site uses a particular supply chain.
 
-For frameworks, prefer a dynamic generator over a static file when the site has generated content: Next.js `app/sitemap.ts`, Django `django.contrib.sitemaps`, Laravel spatie/laravel-sitemap (only add the dependency if the project's conventions allow). Over 50,000 URLs → sitemap index.
+## Verification and submission
 
-## llms.txt
+Use authorised connected tools or the exact user-provided verification artifact when available. Otherwise explain the missing provider step. Do not create dummy Search Console/Bing tokens. DNS verification, property creation and sitemap submission may be completed only within the user's existing scope and available access.
 
-```
-# SITE_NAME
+If IndexNow is requested and supported, validate host/key scope, submit changed URLs only and respect response/rate-limit handling. HTTP 200 means receipt; 202 means key validation is pending, not that URLs are indexed. The Google Indexing API is limited to eligible job-posting/livestream pages; it is not a general SEO submission endpoint.
 
-> One-paragraph summary of what the site/business is and does.
+## Official sources
 
-## Key pages
-- [Page name](https://DOMAIN/path): one-line description
-
-## About
-Canonical facts: founding year, location, what the product/service does, contact.
-```
-
-## site.webmanifest
-
-```json
-{
-  "name": "SITE_NAME",
-  "short_name": "SHORT_NAME",
-  "icons": [
-    { "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/android-chrome-512x512.png", "sizes": "512x512", "type": "image/png" }
-  ],
-  "theme_color": "#COLOR",
-  "background_color": "#COLOR",
-  "display": "standalone"
-}
-```
-
-Link in `<head>`: `<link rel="manifest" href="/site.webmanifest">`. Favicons: favicon.ico, favicon-32x32.png, apple-touch-icon.png (180×180). Generate from an existing logo in the repo if image tooling is available; otherwise instruct the user.
-
-## security.txt (optional, good practice)
-
-At `/.well-known/security.txt`:
-```
-Contact: mailto:SECURITY_EMAIL
-Expires: YYYY-12-31T23:59:59Z
-Preferred-Languages: en
-```
-
-## Google Search Console verification
-
-Cannot be completed for the user — provide instructions:
-1. Go to search.google.com/search-console → Add property (domain or URL prefix).
-2. Verify via DNS TXT record (domain property) or HTML file/meta tag (URL prefix). If they choose the meta-tag method, add the placeholder `<meta name="google-site-verification" content="PASTE_CODE_HERE">` to the head and tell them where to paste the code.
-3. After verification: Sitemaps → submit `sitemap.xml`.
-4. Repeat for Bing Webmaster Tools (can import from Search Console).
-
-## humans.txt / ads.txt / app-ads.txt
-
-Only if applicable: ads.txt is required when the site serves programmatic ads — ask rather than assume.
+- [Robots.txt rules and response handling](https://developers.google.com/crawling/docs/robots-txt/robots-txt-spec)
+- [Sitemap generation and limits](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap)
+- [Google's llms.txt guidance](https://developers.google.com/search/docs/fundamentals/ai-optimization-guide)
+- [IndexNow protocol](https://www.indexnow.org/documentation)
+- [Google Indexing API scope](https://developers.google.com/search/apis/indexing-api/v3/using-api)
