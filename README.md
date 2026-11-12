@@ -7,7 +7,16 @@ Practical skills by [eWebCity](https://eWebCity.co.uk) for working on real repos
 | **ewebcity-fullstack-engineer** | Inspect, implement and validate focused full-stack changes with an honest delivery report. |
 | **ewebcity-seo-optimizer** | Investigate technical SEO, AEO, GEO and performance using evidence, prepare authorised fixes and verify their effects. Includes a bounded source-HTML audit tool. |
 
-## What changes in version 2.1
+## What changes in version 2.2
+
+- **WordPress companion plugin:** eWebCity SEO Bridge reads active Yoast SEO/Rank Math overrides, search visibility and public-post coverage. Use a protected JSON export or an explicit authenticated HTTPS connection.
+- **Auditor attribution:** every new audit defaults to **Auditor: Mahim** in JSON, HTML and the action list; `--auditor` can change it.
+- **Framework guidance:** `--platform` supplies practical fix locations for WordPress, Laravel, PHP, JavaScript, static HTML or another stack. Public source checks remain independent of the framework.
+- **Configuration with provenance:** WordPress provider data retains its snapshot date, source hash, pagination and raw-value limitations. It remains separate from observed frontend checks.
+
+See [WordPress setup](docs/wordpress.md) and the [framework workflow reference](skills/ewebcity-seo-optimizer/references/framework-workflows.md).
+
+### Included from version 2.1
 
 - **Visual audit dashboard:** responsive report with status/category charts, searchable findings, impact/page filters, expandable evidence, page drill-down, baseline comparison, light/dark appearance and a complete-report print layout. Works offline without external assets; evidence remains readable without JavaScript.
 - **More accurate interpretation:** crawler-scoped indexing directives, preserved repeated headers, HTML/HTTP canonical evidence, bounded hreflang checks and explicit character-decoding provenance. Ambiguous evidence remains visible.
@@ -85,12 +94,12 @@ For rollback, preserve any new local edits, move the current skill directory asi
 
 ### npm distribution
 
-This repository does not automatically publish an npm release. **Use the checked-out source unless version 2.1.0 has actually been published.** After that release exists, the equivalent commands are:
+This repository does not automatically publish an npm release. **Use the checked-out source unless version 2.2.0 has actually been published.** After that release exists, the equivalent commands are:
 
 ```bash
-npx --yes --package ewebcity-claude-skills@2.1.0 ewebcity-skills --list
-npx --yes --package ewebcity-claude-skills@2.1.0 ewebcity-skills ewebcity-seo-optimizer --target codex --project
-npx --yes --package ewebcity-claude-skills@2.1.0 ewebcity-seo-audit --help
+npx --yes --package ewebcity-claude-skills@2.2.0 ewebcity-skills --list
+npx --yes --package ewebcity-claude-skills@2.2.0 ewebcity-skills ewebcity-seo-optimizer --target codex --project
+npx --yes --package ewebcity-claude-skills@2.2.0 ewebcity-seo-audit --help
 ```
 
 The packaged skill follows the `SKILL.md` directory format. Automatic compatibility/discovery in other agents or web apps must be verified in that environment; no unproduced `.skill` release downloads are advertised.
@@ -125,6 +134,25 @@ node bin/audit.js \
 ```
 
 The URL supplies the document identity and relative-link base. Offline mode does not invent a response status, server headers, robots policy, link-destination status or indexing result.
+
+### WordPress, Laravel, PHP, JavaScript and static websites
+
+```bash
+# Any public HTTP(S) website; platform selects where-to-fix guidance.
+node bin/audit.js --url https://example.com --platform laravel \
+  --auditor Mahim --output ./seo-audit/laravel
+
+# Add a WordPress companion export from Yoast/Rank Math configuration.
+node bin/audit.js --url https://example.com --wordpress-json ./wordpress-snapshot.json \
+  --platform wordpress --output ./seo-audit/wordpress
+
+# Build the optional WordPress upload plugin from source.
+npm run build:wordpress -- --output ./dist/ewebcity-seo-bridge.zip
+```
+
+`--platform` accepts `generic`, `wordpress`, `laravel`, `php`, `javascript` and `static`. It selects guidance, not stack detection, PHP code execution or browser rendering. JavaScript-generated content needs separate rendered evidence. Reports default to **Auditor: Mahim**; author attribution does not certify an independent human review.
+
+[WordPress setup](docs/wordpress.md) explains plugin installation, export/import and direct `--wordpress-api` connections using environment-held Application Passwords. The connector reads one same-origin HTTPS snapshot and never writes SEO settings. A WordPress plugin is not required for ordinary public-source auditing.
 
 ### Before and after
 
@@ -172,7 +200,7 @@ Use **Print / PDF** to print the complete report, including evidence hidden by i
 
 Use `--help` for accepted ranges. The crawler inspects at most three sitemap documents and 1,000 sitemap locations and follows at most five redirects per fetch. Query parameters remain distinct; all discovered variants share the same crawl budgets. HTML extraction also has explicit limits, recorded in coverage.
 
-Only the selected origin is followed. A redirect to another host, port or scheme is recorded as outside scope; rerun against the intended canonical origin. Public HTTP(S) targets are the default. `--allow-localhost` explicitly enables local development on `localhost` or a literal loopback address; it does not enable private LANs or cloud metadata endpoints. Requests do not use cookies, credentials or environment proxies.
+Only the selected origin is followed. A redirect to another host, port or scheme is recorded as outside scope; rerun against the intended canonical origin. Public HTTP(S) targets are the default. `--allow-localhost` explicitly enables local development on `localhost` or a literal loopback address; it does not enable private LANs or cloud metadata endpoints. Public crawl requests do not use cookies, credentials or environment proxies. The separately requested WordPress bridge connection uses a dedicated authenticated HTTPS request and its own recorded bounds; credentials never enter the crawler.
 
 Observed robots 404/410 responses mean no published rules were found. Unavailable robots and access/rate-limit responses stop collection conservatively. Compressed responses are not decoded by this deliberately small reader; servers are asked for identity encoding, and unsupported responses are recorded as unavailable. A partial run remains visibly partial.
 
@@ -219,7 +247,7 @@ npm test
 npm pack --dry-run
 ```
 
-Tests use temporary project directories, offline documents, mocked DNS and explicit loopback HTTP servers. They do not modify a personal skill installation, contact production sites or require provider credentials. Keep the Python helper files together when copying a skill. Generated Python caches are excluded from installation and packaging.
+Tests use temporary project directories, offline documents, mocked DNS and explicit loopback HTTP servers. They do not modify a personal skill installation, contact production sites or require provider credentials. Keep the Python helper files together when copying a skill. Generated Python caches are excluded from installation and packaging. The optional WordPress plugin has a separate PHP lint/contract runner under `tests/wordpress/`; a real WordPress activation test remains a staging check.
 
 The normal suite includes report interaction logic with a small DOM test double. It checks filtering, disclosure state, page drill-down, appearance fallback and complete-report print events; these are not browser layout tests.
 

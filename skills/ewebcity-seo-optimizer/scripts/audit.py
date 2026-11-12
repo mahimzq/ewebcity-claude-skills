@@ -13,9 +13,11 @@ import hashlib
 from html import unescape
 from html.parser import HTMLParser
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import unicodedata
 from urllib.parse import urljoin, urlsplit
 import xml.etree.ElementTree as ET
 
@@ -25,7 +27,7 @@ if sys.version_info < (3, 10):
 from safe_http import BudgetExceeded, FetchError, PRODUCT_TOKEN, RobotsPolicy, SafeClient, normalise_url, origin
 from html_evidence import decode_html, link_header_evidence, robots_evidence
 
-TOOL_VERSION = "2.1.0"
+TOOL_VERSION = "2.2.0"
 SCHEMA_VERSION = "1.0"
 REFERENCE_CHECKED_AT = "2026-11-12"
 SEARCH_DOCS = "https://developers.google.com/search/docs/"
@@ -443,9 +445,10 @@ def analyse_html(url: str, html: str, *, collected_at: str | None = None,
         "A canonical points to another origin." if external_canonical else "No cross-origin canonical was observed.",
         "Confirm whether cross-origin canonicalisation is intentional, for example for syndicated content; do not change it automatically.", "canonical", related_urls=external_canonical)
     add("canonical_signal_consistency", "warning" if len(canonical) > 1 else "not_checked" if bad_canonical or header_link_issues else "pass" if canonical else "not_applicable", "medium",
-        f"Observed {len(canonical)} distinct resolved canonical destinations across HTML and HTTP headers.",
+        f"Observed {len(canonical)} distinct resolved canonical destinations among inspected declarations."
+        + (" Source HTML and HTTP headers were inspected." if headers_were_supplied else " Only source HTML was inspected; HTTP headers were not inspected."),
         "Align intentional HTML/HTTP canonical signals after checking content equivalence; identical declarations across the two channels are not conflicting destinations.",
-        "canonical", related_urls=canonical, declarations=canonical_sources)
+        "canonical", related_urls=canonical, declarations=canonical_sources, headers_inspected=headers_were_supplied)
     fragments = [item["href"] for item in canonical_sources if "#" in item["href"] and item.get("resolved_url")]
     add("canonical_fragment", "warning" if fragments else "not_checked" if header_link_issues else "pass" if canonical_sources else "not_applicable", "low",
         f"Observed {len(fragments)} canonical annotation(s) containing a fragment identifier.",
@@ -550,7 +553,7 @@ def _is_html(headers: dict, body: bytes) -> bool:
 
 def _base_report(target: str, mode: str, limits: dict) -> dict:
     return {"schema_version": SCHEMA_VERSION, "tool_version": TOOL_VERSION,
-        "target": target, "collected_at": utc_now(), "mode": mode,
+        "target": target, "collected_at": utc_now(), "mode": mode, "auditor": "Mahim",
         "coverage": {"scope_origin": origin(target), "limits": limits, "requests": 0,
             "bytes_received": 0, "pages_fetched": 0, "pages_analysed": 0,
             "byte_measurement": "Response body bytes only; excludes headers and transport overhead. Identity encoding is requested and compressed responses are not analysed.",
@@ -956,11 +959,22 @@ def _bounded_float(minimum: float, maximum: float):
     return parse
 
 
+def _auditor_name(value: str) -> str:
+    value = value.strip()
+    if not value or len(value) > 100 or any(unicodedata.category(char) in ("Cc", "Cs") for char in value):
+        raise argparse.ArgumentTypeError("Auditor must be 1–100 characters without control characters.")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
+    from implementation import PLATFORMS, implementation_context
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="Canonical HTTP(S) target and exact origin scope.")
     parser.add_argument("--output", type=Path, required=True, help="Directory for audit.json, report.html and fixes.md.")
     parser.add_argument("--html", type=Path, help="Analyse one saved HTML file with no network access.")
+    parser.add_argument("--auditor", type=_auditor_name, default="Mahim", help="Report attribution (default: Mahim).")
+    parser.add_argument("--platform", choices=PLATFORMS,
+                        help="Select implementation guidance; does not detect a stack or alter source checks.")
     parser.add_argument("--max-pages", type=_bounded_int(1, 500), default=30)
     parser.add_argument("--max-depth", type=_bounded_int(0, 10), default=3)
     parser.add_argument("--timeout", type=_bounded_float(0.1, 60), default=10.0)
@@ -973,14 +987,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compare", type=Path, help="Prior compatible audit.json; missing coverage is never proof of resolution.")
     parser.add_argument("--performance-json", type=Path, action="append", default=[],
                         help="Local Lighthouse/PageSpeed/CrUX JSON evidence; repeat for multiple exports. Validated before crawling.")
+    wordpress_group = parser.add_mutually_exclusive_group()
+    wordpress_group.add_argument("--wordpress-json", type=Path,
+                                help="Local eWebCity WordPress bridge snapshot; keeps stored overrides separate from front-end evidence.")
+    wordpress_group.add_argument("--wordpress-api",
+                                help="Exact HTTPS bridge snapshot endpoint on the target origin. Reads EWEBCITY_WP_USER and EWEBCITY_WP_APP_PASSWORD from the environment.")
     parser.add_argument("--version", action="version", version=TOOL_VERSION)
     args = parser.parse_args(argv)
+    if args.html and args.wordpress_api:
+        parser.error("--html is strictly offline; use --wordpress-json with an exported snapshot.")
     try:
         target = normalise_url(args.url)
         measurements = None
         if args.performance_json:
             from measurements import load_performance_evidence
             measurements = load_performance_evidence(args.performance_json, target)
+        wordpress = None
+        if args.wordpress_json:
+            from wordpress import load_wordpress_evidence
+            wordpress = load_wordpress_evidence(args.wordpress_json, target)
+        elif args.wordpress_api:
+            from wordpress import fetch_wordpress_evidence
+            username = os.environ.get("EWEBCITY_WP_USER", "")
+            password = os.environ.get("EWEBCITY_WP_APP_PASSWORD", "")
+            if not username.strip() or not password.strip():
+                raise ValueError("WordPress connection requires EWEBCITY_WP_USER and EWEBCITY_WP_APP_PASSWORD in the local environment. Use an Application Password, or supply --wordpress-json.")
+            wordpress = fetch_wordpress_evidence(args.wordpress_api, target, username, password, timeout=args.timeout)
         if args.html:
             report = audit_offline(args.html, target, max_bytes=args.max_bytes)
         else:
@@ -990,6 +1022,10 @@ def main(argv: list[str] | None = None) -> int:
                 max_seconds=args.max_seconds, allow_localhost=args.allow_localhost)
         if measurements is not None:
             report["measurements"] = measurements
+        report["auditor"] = args.auditor
+        report["implementation"] = implementation_context(args.platform, wordpress=wordpress is not None)
+        if wordpress is not None:
+            report["wordpress"] = wordpress
         # Imported only on the CLI output path; analyse_html stays a pure helper.
         from reporting import write_reports
         write_reports(report, args.output, args.compare)

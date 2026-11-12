@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills/ewebcity-seo-optimizer/scripts"))
-from reporting import compare_reports, render_html, write_reports
+from reporting import compare_reports, render_fixes, render_html, write_reports
 
 
 class DashboardDocument(HTMLParser):
@@ -60,6 +60,32 @@ def fixture(status="fail"):
                       "reference_url": "https://developers.google.com/search/docs/appearance/title-link",
                       "reference_checked_at": "2026-11-12"}],
         "checks_not_performed": ["Google indexing state", "Rendered DOM", "Field Core Web Vitals"],
+    }
+
+
+def wordpress_fixture():
+    return {
+        "format": "ewebcity-wordpress-snapshot", "schema_version": "1.0", "bridge_version": "2.2.0",
+        "mode": "offline_snapshot", "generated_at": "2026-11-12T09:00:00Z", "snapshot_auditor": "Export operator",
+        "site": {"home_url": "https://example.com/", "site_url": "https://example.com/wp/",
+                 "search_visibility": "discourage", "permalink_structure": "/%postname%/"},
+        "providers": [{"id": "yoast", "active": True, "version": "27.0"},
+                      {"id": "rankmath", "active": True, "version": "1.0.300"}],
+        "pagination": {"page": 1, "per_page": 2, "total_posts": 13, "total_pages": 7},
+        "coverage": {"posts_imported": 2, "total_posts_reported": 13, "total_pages_reported": 7,
+                     "page": 1, "complete": False, "scope": "one snapshot page of published posts"},
+        "provenance": {"kind": "local_file", "input_file": "wordpress.json", "input_sha256": "a" * 64,
+                       "collected_at": "2026-11-12T10:00:00Z", "byte_count": 1200, "source_url": None},
+        "posts": [
+            {"id": 12, "type": "page", "url": "https://example.com/", "modified_gmt": "2026-11-10T13:00:00",
+             "metadata": {"yoast": {"title": "%%title%%", "description": "", "canonical": "",
+                                    "robots_noindex": "1", "robots_nofollow": "0", "robots_advanced": ""}}},
+            {"id": 18, "type": "post", "url": "https://example.com/article", "modified_gmt": "2026-11-11T09:00:00",
+             "metadata": {"rankmath": {"title": "%title%", "description": "Article summary", "canonical": "",
+                                       "robots": ["index", "follow"]}}},
+        ],
+        "issues": ["Only one snapshot page was imported."],
+        "note": "Saved plugin overrides; not resolved frontend metadata or proof of indexing.",
     }
 
 
@@ -128,6 +154,107 @@ class ComparisonTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_auditor_is_recorded_without_attributing_legacy_reports(self):
+        report = fixture()
+        for value in (None, "", "  ", 1, [], {}):
+            with self.subTest(value=value):
+                report["auditor"] = value
+                parsed = DashboardDocument(render_html(report))
+                author = next(attrs["content"] for tag, attrs in parsed.elements if tag == "meta" and attrs.get("name") == "author")
+                self.assertEqual(author, "Not supplied")
+                self.assertIn("Auditor: Not supplied", render_fixes(report))
+        del report["auditor"]
+        self.assertIn("Auditor: Not supplied", render_fixes(report))
+        self.assertNotIn("Mahim", render_html(report))
+        report["auditor"] = "Mahim"
+        parsed = DashboardDocument(render_html(report))
+        self.assertIn("AuditorMahim", "".join(parsed.text))
+        self.assertIn("Auditor: Mahim", render_fixes(report))
+        self.assertEqual(next(attrs["content"] for tag, attrs in parsed.elements if tag == "meta" and attrs.get("name") == "author"), "Mahim")
+
+    def test_wordpress_and_platform_context_keep_source_counts_and_raw_evidence_separate(self):
+        report = fixture()
+        baseline = DashboardDocument(render_html(report))
+        report["auditor"] = "Mahim"
+        report["wordpress"] = wordpress_fixture()
+        report["wordpress"]["coverage"]["posts_imported"] = 9999
+        report["wordpress"]["posts"][0]["truncated_fields"] = ["yoast.title"]
+        report["wordpress"]["posts"][0]["omitted_fields"] = ["yoast.robots_advanced"]
+        report["implementation"] = {
+            "platform": "wordpress", "label": "WordPress", "basis": "wordpress_snapshot",
+            "guidance": ["Change the relevant plugin override or template, then recheck the rendered page."],
+            "note": "The supplied snapshot provides platform context; it is not a frontend verification.",
+            "references": [{"label": "WordPress REST API", "url": "https://developer.wordpress.org/rest-api/",
+                            "checked_at": "2026-11-12"}],
+        }
+        original = deepcopy(report)
+        parsed = DashboardDocument(render_html(report))
+        text = "".join(parsed.text)
+        self.assertEqual(parsed.by_attribute("data-kpi"), baseline.by_attribute("data-kpi"))
+        self.assertEqual(parsed.by_attribute("data-wordpress-records"), [{"data-wordpress-records": "2"}])
+        self.assertEqual(len(parsed.by_class("article", "wordpress-post")), 2)
+        self.assertTrue(all("open" in attrs and "hidden" not in attrs for attrs in parsed.by_class("details", "wordpress-overrides")))
+        for value in ("Yoast SEO", "Rank Math", "27.0", "1.0.300", "Active in snapshot", "Discourage search engines (WordPress setting)",
+                      "Plugin-reported posts", "1 of 7", "Snapshot auditor: Export operator", "Snapshot generated: 12 Nov 2026 · 09:00 UTC",
+                      "Imported: 12 Nov 2026 · 10:00 UTC", "%%title%%", '"robots_noindex": "1"', '"robots": [',
+                      "not resolved frontend metadata", "does not verify resolved frontend metadata", "Based on the supplied WordPress snapshot",
+                      "WordPress REST API", "2026-11-12", "Only one snapshot page was imported."):
+            self.assertIn(value, text)
+        for value in ('"truncated_fields": [', '"omitted_fields": [', '"yoast.title"', '"yoast.robots_advanced"'):
+            self.assertIn(value, text)
+        for fragment in ("#wordpress", "#implementation"):
+            self.assertTrue(any(attrs.get("href") == fragment for _, attrs in parsed.elements))
+            self.assertTrue(any(attrs.get("id") == fragment[1:] for _, attrs in parsed.elements))
+        fixes = render_fixes(report)
+        for value in ("Auditor: Mahim", "## Implementation guidance", "Platform: WordPress", "WordPress REST API",
+                      "## WordPress snapshot context", "Posts in this import: 2", "Snapshot auditor: Export operator"):
+            self.assertIn(value, fixes)
+        self.assertEqual(report, original)
+
+    def test_new_contexts_and_auditor_escape_untrusted_values_and_links(self):
+        report = fixture()
+        attack = '\"/><script src="https://attacker.example/x.js">bad()</script><img src=x onerror=bad()>\n# Forged heading'
+        report["auditor"] = attack
+        snapshot = wordpress_fixture()
+        snapshot.update(snapshot_auditor=attack, note=attack, issues=[attack], generated_at=attack)
+        snapshot["site"].update(home_url="javascript:bad()", site_url="data:text/html,attack", permalink_structure=attack)
+        snapshot["providers"] = [{"id": attack, "active": True, "version": attack}]
+        snapshot["posts"][0].update(id=attack, type=attack, url="javascript:bad()", modified_gmt=attack,
+                                    metadata={"yoast": {"title": attack}, "headHTML": attack})
+        snapshot["provenance"].update(input_file=attack, source_url=attack)
+        report["wordpress"] = snapshot
+        report["implementation"] = {"label": attack, "platform": attack, "basis": attack, "note": attack,
+                                    "guidance": [attack], "references": [{"label": attack, "url": "javascript:bad()", "checked_at": attack}]}
+        parsed = DashboardDocument(render_html(report))
+        self.assertEqual(len(parsed.scripts), 1)
+        self.assertEqual(len(parsed.styles), 1)
+        self.assertEqual(parsed.scripts, DashboardDocument(render_html(fixture())).scripts)
+        self.assertFalse(any(tag == "img" for tag, _ in parsed.elements))
+        self.assertFalse(any(key.startswith("on") for _, attrs in parsed.elements for key in attrs))
+        self.assertFalse(any(attrs.get("href", "").startswith(("javascript:", "data:")) for _, attrs in parsed.elements))
+        self.assertEqual(next(attrs["content"] for tag, attrs in parsed.elements if tag == "meta" and attrs.get("name") == "author"), attack)
+        self.assertIn(attack, "".join(parsed.text))
+        fixes = render_fixes(report)
+        self.assertNotIn("<script", fixes)
+        self.assertNotIn("<img", fixes)
+        self.assertNotIn("\n# Forged heading", fixes)
+
+    def test_optional_contexts_are_absent_for_legacy_and_do_not_infer_inactive_plugins(self):
+        parsed = DashboardDocument(render_html(fixture()))
+        self.assertFalse(any(attrs.get("id") in {"wordpress", "implementation"} for _, attrs in parsed.elements))
+        self.assertNotIn("## Implementation guidance", render_fixes(fixture()))
+        report = fixture()
+        report["wordpress"] = wordpress_fixture()
+        report["wordpress"]["providers"] = report["wordpress"]["providers"][:1]
+        report["wordpress"]["posts"] = []
+        text = "".join(DashboardDocument(render_html(report)).text)
+        self.assertIn("Rank MathNot reported in snapshot", text)
+        self.assertNotIn("Reported inactive", text)
+        self.assertIn("No post overrides imported", text)
+        report["implementation"] = {"platform": "laravel", "label": "Laravel", "basis": "user_selected", "guidance": ["Update the Blade layout and recheck the emitted metadata."]}
+        self.assertIn("Context basis: Selected by the user", "".join(DashboardDocument(render_html(report)).text))
+        self.assertIn("Platform: Laravel", render_fixes(report))
+
     def test_embedded_css_has_no_unmatched_rule_braces(self):
         from reporting import _STYLE
         depth, quote, escaped = 0, None, False
@@ -284,7 +411,19 @@ class ReportTests(unittest.TestCase):
         report["demonstration"] = True
         parsed = DashboardDocument(render_html(report))
         self.assertEqual(len(parsed.by_class("div", "demo-banner")), 1)
-        self.assertIn("Sample HTML and synthetic performance exports; not a live website assessment.", "".join(parsed.text))
+        self.assertIn("Sample HTML and synthetic imports; not a live website assessment.", "".join(parsed.text))
+
+    def test_synthetic_imports_are_prominent_without_relabelling_source_findings(self):
+        report = fixture()
+        report["wordpress"] = wordpress_fixture()
+        report["wordpress"]["_demonstration"] = True
+        parsed = DashboardDocument(render_html(report))
+        self.assertEqual(len(parsed.by_class("div", "demo-banner")), 1)
+        self.assertIn("Includes demonstration evidence", "".join(parsed.text))
+        self.assertNotIn("not a live website assessment", "".join(parsed.text))
+        self.assertIn("Demonstration evidence is included", render_fixes(report))
+        report["wordpress"]["_demonstration"] = "true"
+        self.assertEqual(DashboardDocument(render_html(report)).by_class("div", "demo-banner"), [])
 
     def test_field_collection_window_is_distinct_from_export_analysis_time(self):
         report = fixture()

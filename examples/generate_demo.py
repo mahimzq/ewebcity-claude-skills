@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "skills/ewebcity-seo-optimizer/scripts"))
 from audit import audit_offline
 from measurements import load_performance_evidence
 from reporting import compare_reports, write_reports
+from implementation import implementation_context
+from wordpress import load_wordpress_evidence
 
 
 def main():
@@ -24,6 +26,8 @@ def main():
     before["demonstration"] = True
     before["measurements"] = load_performance_evidence(
         [example / "sample-lighthouse.json", example / "sample-crux.json"], target)
+    before["wordpress"] = load_wordpress_evidence(example / "sample-wordpress.json", target)
+    before["implementation"] = implementation_context("wordpress")
     # Create a second actual snapshot, with two deliberate changes, for comparison.
     with tempfile.TemporaryDirectory(prefix="ewebcity-demo-") as tmp:
         changed = Path(tmp) / "after.html"
@@ -33,6 +37,8 @@ def main():
         after = audit_offline(changed, target)
     after["demonstration"] = True
     after["measurements"] = deepcopy(before["measurements"])
+    after["wordpress"] = deepcopy(before["wordpress"])
+    after["implementation"] = deepcopy(before["implementation"])
     # Keep the same imported evidence; this example does not claim a speed improvement.
     before["coverage"]["source_file"] = "sample-page.html"
     after["coverage"]["source_file"] = "sample-page.html with the documented example fixes"

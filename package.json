@@ -1,7 +1,7 @@
 {
   "name": "ewebcity-claude-skills",
-  "version": "2.1.0",
-  "description": "Portable eWebCity agent skills with evidence-based SEO/AEO/GEO audits, interactive visual reports, performance evidence imports and safe installation across coding agents.",
+  "version": "2.2.0",
+  "description": "Portable eWebCity SEO/AEO/GEO skills with Yoast/Rank Math WordPress evidence, framework-aware guidance, auditor attribution and interactive visual reports.",
   "bin": {
     "ewebcity-claude-skills": "bin/install.js",
     "ewebcity-seo-audit": "bin/audit.js",
@@ -12,6 +12,7 @@
     "skills",
     "docs",
     "examples",
+    "integrations",
     "README.md",
     "LICENSE"
   ],
@@ -31,7 +32,11 @@
     "copilot",
     "antigravity",
     "deepseek",
-    "audit-report"
+    "audit-report",
+    "wordpress",
+    "yoast",
+    "rank-math",
+    "laravel"
   ],
   "author": "eWebCity <https://eWebCity.co.uk>",
   "homepage": "https://eWebCity.co.uk",
@@ -50,6 +55,7 @@
     "audit:seo": "node bin/audit.js",
     "check": "node --check bin/install.js && node --check bin/audit.js",
     "test:node": "node --test tests/installer.test.js tests/launcher.test.js tests/report-interactions.test.js",
-    "test:report": "node tests/report.browser.js"
+    "test:report": "node tests/report.browser.js",
+    "build:wordpress": "python3 -B bin/build-wordpress.py"
   }
 }

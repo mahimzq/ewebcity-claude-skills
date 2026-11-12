@@ -140,6 +140,20 @@ def _html(value) -> str:
     return escape(_plain(value), quote=True)
 
 
+def _auditor(value) -> str:
+    """Do not attribute a legacy or malformed report to the current default auditor."""
+    return value.strip() if isinstance(value, str) and value.strip() else "Not supplied"
+
+
+def _has_synthetic_imports(report: dict) -> bool:
+    snapshot = report.get("wordpress")
+    if isinstance(snapshot, dict) and snapshot.get("_demonstration") is True:
+        return True
+    measurements = report.get("measurements")
+    items = measurements.get("items") if isinstance(measurements, dict) else None
+    return isinstance(items, list) and any(isinstance(item, dict) and item.get("demonstration") is True for item in items)
+
+
 def _link(url) -> str:
     if not isinstance(url, str):
         return _html(url)
@@ -372,6 +386,90 @@ _SCRIPT = r'''
 '''.strip()
 
 
+def _implementation_basis(value) -> str:
+    labels = {
+        "user_selected": "Selected by the user",
+        "wordpress_snapshot": "Based on the supplied WordPress snapshot",
+        "unspecified": "Platform unspecified",
+    }
+    return labels.get(value, "Not supplied") if isinstance(value, str) else "Not supplied"
+
+
+def _implementation_html(report: dict) -> str:
+    context = report.get("implementation")
+    if not isinstance(context, dict):
+        return ""
+    label = context.get("label") or context.get("platform") or "Platform not supplied"
+    guidance = context.get("guidance")
+    guidance = [item for item in guidance if isinstance(item, str)] if isinstance(guidance, list) else []
+    references = context.get("references")
+    references = [item for item in references if isinstance(item, dict)] if isinstance(references, list) else []
+    reference_html = ""
+    if references:
+        rows = ''.join(f'<li><strong>{_html(item.get("label") or "Official reference")}</strong> · {_link(item.get("url"))}<br>Reference checked: {_html(item.get("checked_at"))}</li>' for item in references)
+        reference_html = '<details class="measurement-provenance" open><summary>Implementation references' + _icon('chevron') + '</summary><ul>' + rows + '</ul></details>'
+    items = ''.join('<li>' + _html(item) + '</li>' for item in guidance) or '<li>No platform-specific guidance was supplied.</li>'
+    note = '<p class="table-note">' + _html(context['note']) + '</p>' if context.get('note') else ''
+    return f'''<section class="section" id="implementation" aria-labelledby="implementation-title"><div class="section-heading"><div><span class="section-number">Apply within your stack</span><h2 id="implementation-title">Implementation guidance</h2><p>Use the recorded platform context when acting on the observed findings.</p></div></div><div class="limitations"><h3>{_html(label)}</h3><p class="table-note">Context basis: {_html(_implementation_basis(context.get('basis')))}</p><ul>{items}</ul>{note}{reference_html}</div></section>'''
+
+
+def _wordpress_providers(snapshot: dict) -> list:
+    names = {"yoast": "Yoast SEO", "rankmath": "Rank Math"}
+    providers = snapshot.get("providers")
+    rows, recorded = [], set()
+    for provider in providers if isinstance(providers, list) else []:
+        if not isinstance(provider, dict):
+            continue
+        provider_id = provider.get("id")
+        name = names.get(provider_id, provider_id) if isinstance(provider_id, str) else "Provider not supplied"
+        if isinstance(provider_id, str):
+            recorded.add(provider_id)
+        activity = "Active in snapshot" if provider.get("active") is True else "Reported inactive" if provider.get("active") is False else "Activity not recorded"
+        rows.append((name, activity, provider.get("version")))
+    for provider_id, name in names.items():
+        if provider_id not in recorded:
+            rows.append((name, "Not reported in snapshot", None))
+    return rows
+
+
+def _wordpress_visibility(site: dict) -> str:
+    visibility = site.get("search_visibility")
+    if visibility == "allow":
+        return "Allow search engines (WordPress setting)"
+    if visibility == "discourage":
+        return "Discourage search engines (WordPress setting)"
+    return "Not recorded"
+
+
+def _wordpress_html(report: dict) -> str:
+    snapshot = report.get("wordpress")
+    if not isinstance(snapshot, dict):
+        return ""
+    site = snapshot.get("site") if isinstance(snapshot.get("site"), dict) else {}
+    coverage = snapshot.get("coverage") if isinstance(snapshot.get("coverage"), dict) else {}
+    pagination = snapshot.get("pagination") if isinstance(snapshot.get("pagination"), dict) else {}
+    provenance = snapshot.get("provenance") if isinstance(snapshot.get("provenance"), dict) else {}
+    posts = snapshot.get("posts")
+    posts = [post for post in posts if isinstance(post, dict)] if isinstance(posts, list) else []
+    reported_total = coverage.get("total_posts_reported", pagination.get("total_posts"))
+    page = coverage.get("page", pagination.get("page"))
+    total_pages = coverage.get("total_pages_reported", pagination.get("total_pages"))
+    page_label = _number(page) + " of " + _number(total_pages)
+    mode = snapshot.get("mode")
+    mode_label = "Local snapshot import" if mode == "offline_snapshot" else "Authenticated snapshot import" if mode == "authenticated_snapshot" else "Import mode not recorded"
+    providers = ''.join(f'<tr><th scope="row">{_html(name)}</th><td>{_html(activity)}</td><td>{_html(version)}</td></tr>' for name, activity, version in _wordpress_providers(snapshot))
+    post_panels = []
+    for post in posts:
+        post_panels.append(f'''<article class="panel wordpress-post"><div class="measurement-head"><div><span class="measurement-kind">Saved plugin overrides</span><h3>Post {_html(post.get('id'))} · {_html(post.get('type'))}</h3><p>Post modified (GMT): {_html(post.get('modified_gmt'))}</p></div><div class="measurement-scope">{_link(post.get('url'))}</div></div><details class="measurement-provenance wordpress-overrides" open><summary>Stored override values{_icon('chevron')}</summary><pre tabindex="0">{_html({'metadata': post.get('metadata', {}), 'truncated_fields': post.get('truncated_fields', []), 'omitted_fields': post.get('omitted_fields', [])})}</pre></details></article>''')
+    issues = snapshot.get("issues")
+    issue_html = '<div class="import-issues"><strong>Snapshot import limitations</strong><ul>' + ''.join('<li>' + _html(issue) + '</li>' for issue in issues) + '</ul></div>' if isinstance(issues, list) and issues else ''
+    record = {key: snapshot.get(key) for key in ("format", "schema_version", "bridge_version", "mode", "generated_at", "snapshot_auditor", "pagination", "coverage", "provenance")}
+    note = '<p class="table-note">' + _html(snapshot['note']) + '</p>' if snapshot.get('note') else ''
+    permalink = site.get("permalink_structure")
+    permalink = "Empty string" if permalink == "" else permalink
+    return f'''<section class="section" id="wordpress" aria-labelledby="wordpress-title"><div class="section-heading"><div><span class="section-number">CMS snapshot evidence</span><h2 id="wordpress-title">WordPress &amp; SEO plugins</h2><p>Saved settings and plugin overrides, imported independently of the source-HTML audit.</p></div></div><div class="coverage-layout"><div class="panel"><div class="panel-title"><h3>Bounded snapshot coverage</h3></div><dl class="coverage-grid"><div><dt>Posts in this import</dt><dd data-wordpress-records="{len(posts)}">{len(posts):,}</dd></div><div><dt>Plugin-reported posts</dt><dd>{_html(_number(reported_total))}</dd></div><div><dt>Snapshot page</dt><dd>{_html(page_label)}</dd></div></dl><p class="table-note">Coverage is limited to the imported records; this is not a frontend crawl.</p></div><div class="panel"><ul class="scope-list"><li>{_icon('scope')}<div><strong>Search visibility preference</strong>{_html(_wordpress_visibility(site))}</div></li><li>{_icon('clock')}<div><strong>{_html(mode_label)}</strong>Snapshot generated: {_html(_date(snapshot.get('generated_at')))}<br>Imported: {_html(_date(provenance.get('collected_at')))}<br>Snapshot auditor: {_html(_auditor(snapshot.get('snapshot_auditor')))}</div></li><li>{_icon('pages')}<div><strong>WordPress URLs &amp; permalinks</strong>Home: {_link(site.get('home_url'))}<br>Site: {_link(site.get('site_url'))}<br>Permalink structure: <code>{_html(permalink)}</code></div></li></ul></div></div><div class="table-shell"><table><caption>Provider versions and activity recorded by the snapshot</caption><thead><tr><th scope="col">Provider</th><th scope="col">Recorded state</th><th scope="col">Version</th></tr></thead><tbody>{providers}</tbody></table></div><p class="table-note">A provider that is not reported is not assumed to be installed or inactive. Saved overrides may be empty, contain template variables or be superseded by defaults, filters and caches.</p><div class="measurements">{''.join(post_panels) or '<div class="empty-state"><h3>No post overrides imported</h3><p>Review the snapshot pagination and import limitations.</p></div>'}</div>{issue_html}<details class="raw-coverage" open><summary>Snapshot provenance &amp; pagination{_icon('chevron')}</summary><pre tabindex="0">{_html(record)}</pre></details>{note}<p class="table-note">This snapshot does not verify resolved frontend metadata, indexability, indexing or search performance. Its records do not change the source-audit check counts.</p></section>'''
+
+
 def _measurements_html(report: dict) -> str:
     measurements = report.get("measurements")
     if not isinstance(measurements, dict):
@@ -477,6 +575,7 @@ def render_html(report: dict) -> str:
         page_rows.append(f'''<tr class="page-row" data-page="{_html(url)}"><td><span class="page-url">{_link(url)}</span><span class="page-title">{_html(page.get('title') or 'No title recorded')}</span><button type="button" class="text-button js-only" data-page-jump="{_html(url)}">View page checks {_icon('arrow')}</button></td><td>{http}</td><td><div class="count-pair"><span class="count-chip count-fail">{group['fail']} failed</span><span class="count-chip count-warning">{group['warning']} review</span></div></td><td>{group['not_checked']}</td><td class="page-canonical">{canonical_html}</td></tr>''')
     offline = report['mode'].startswith('offline')
     collected = _date(report.get('collected_at'))
+    auditor = _auditor(report.get('auditor'))
     collection_label = 'Saved HTML snapshot' if offline else 'Bounded sample complete' if coverage.get('complete') is True else 'Partial collection'
     collection_class = '' if offline or coverage.get('complete') is True else ' partial'
     discovery = coverage.get('discovered_urls')
@@ -492,25 +591,31 @@ def render_html(report: dict) -> str:
     stop_text = ', '.join(str(item).replace('_', ' ') for item in stop_reasons) if isinstance(stop_reasons, list) and stop_reasons else 'No collection stop reason recorded'
     scope_origin = coverage.get('scope_origin') or report['target']
     unchecked = report.get('checks_not_performed') if isinstance(report.get('checks_not_performed'), list) else []
-    demonstration = ('<div class="demo-banner" role="note">' + _icon("info") + '<span><strong>Demonstration report</strong> · Sample HTML and synthetic performance exports; not a live website assessment.</span></div>') if report.get("demonstration") is True else ""
+    demonstration = ('<div class="demo-banner" role="note">' + _icon("info") + '<span><strong>Demonstration report</strong> · Sample HTML and synthetic imports; not a live website assessment.</span></div>') if report.get("demonstration") is True else ""
+    if not demonstration and _has_synthetic_imports(report):
+        demonstration = '<div class="demo-banner" role="note">' + _icon("info") + '<span><strong>Includes demonstration evidence</strong> · Some imported WordPress or performance data is synthetic. Review its provenance separately from the source-page findings.</span></div>'
     measurements = _measurements_html(report)
     performance_nav = f'<a class="nav-link" href="#performance">{_icon("pulse")}<span>Performance</span></a>' if measurements else ''
+    wordpress = _wordpress_html(report)
+    wordpress_nav = f'<a class="nav-link" href="#wordpress">{_icon("pages")}<span>WordPress</span></a>' if wordpress else ''
+    implementation = _implementation_html(report)
+    implementation_nav = f'<a class="nav-link" href="#implementation">{_icon("check")}<span>Implementation</span></a>' if implementation else ''
     style_hash = base64.b64encode(hashlib.sha256(_STYLE.encode('utf-8')).digest()).decode('ascii')
     script_hash = base64.b64encode(hashlib.sha256(_SCRIPT.encode('utf-8')).digest()).decode('ascii')
     policy = f"default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'sha256-{style_hash}'; script-src-attr 'none'; style-src-attr 'none'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     return f'''<!doctype html>
-<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta http-equiv="Content-Security-Policy" content="{_html(policy)}"><title>eWebCity website audit — {_html(report['target'])}</title><style id="audit-style">{_STYLE}</style></head><body>
-<a class="skip-link" href="#main">Skip to report</a><aside class="sidebar" aria-label="Report navigation"><a class="brand" href="#overview" aria-label="eWebCity audit overview"><span class="brand-mark" aria-hidden="true"><span>e</span></span>eWebCity</a><p class="brand-subtitle">WEBSITE INTELLIGENCE</p><div class="nav-label">This report</div><nav><a class="nav-link primary" href="#overview">{_icon('grid')}<span>Overview</span></a><a class="nav-link" href="#findings">{_icon('flag')}<span>Findings</span><span class="nav-count">{len(issues):,}</span></a><a class="nav-link" href="#pages">{_icon('pages')}<span>Pages</span><span class="nav-count">{len(pages):,}</span></a>{performance_nav}<a class="nav-link" href="#comparison">{_icon('compare')}<span>Comparison</span></a><a class="nav-link" href="#coverage">{_icon('scope')}<span>Evidence &amp; scope</span></a></nav><div class="sidebar-bottom"><strong>Evidence, then action.</strong>Source observations with clear limits.<br>Audit engine v{_html(report['tool_version'])}</div></aside>
+<html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="author" content="{_html(auditor)}"><meta http-equiv="Content-Security-Policy" content="{_html(policy)}"><title>eWebCity website audit — {_html(report['target'])}</title><style id="audit-style">{_STYLE}</style></head><body>
+<a class="skip-link" href="#main">Skip to report</a><aside class="sidebar" aria-label="Report navigation"><a class="brand" href="#overview" aria-label="eWebCity audit overview"><span class="brand-mark" aria-hidden="true"><span>e</span></span>eWebCity</a><p class="brand-subtitle">WEBSITE INTELLIGENCE</p><div class="nav-label">This report</div><nav><a class="nav-link primary" href="#overview">{_icon('grid')}<span>Overview</span></a><a class="nav-link" href="#findings">{_icon('flag')}<span>Findings</span><span class="nav-count">{len(issues):,}</span></a><a class="nav-link" href="#pages">{_icon('pages')}<span>Pages</span><span class="nav-count">{len(pages):,}</span></a>{wordpress_nav}{performance_nav}<a class="nav-link" href="#comparison">{_icon('compare')}<span>Comparison</span></a>{implementation_nav}<a class="nav-link" href="#coverage">{_icon('scope')}<span>Evidence &amp; scope</span></a></nav><div class="sidebar-bottom"><strong>Evidence, then action.</strong>Source observations with clear limits.<br>Audit engine v{_html(report['tool_version'])}</div></aside>
 <main class="workspace" id="main"><div class="topbar"><div class="breadcrumb"><span>eWebCity</span><span aria-hidden="true">/</span><strong>Website audit</strong></div><div class="top-actions js-only"><label class="theme-control"><span>Appearance</span><select id="theme-choice" aria-label="Report appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><button id="print-report" class="button" type="button" aria-label="Print or save the complete report as PDF">{_icon('print')}<span>Print / PDF</span></button></div></div>
 <noscript><p class="no-script">JavaScript is disabled. All findings and evidence are available below. Interactive filtering and the appearance selector require JavaScript; your browser's print command remains available.</p></noscript>
-{demonstration}<section id="overview" aria-labelledby="report-title"><header class="hero"><div><span class="eyebrow">{_icon('scope')}SEO · AEO · GEO</span><h1 id="report-title" class="hero-title">Website audit</h1><p class="hero-description">A clear view of the observed issues, supporting evidence and practical next steps for your website.</p><div class="target-link">{_link(report['target'])}{_icon('arrow')}</div></div><dl class="hero-meta"><div><dt>Collection status</dt><dd><span class="collection-pill{collection_class}"><span class="status-dot" aria-hidden="true"></span>{collection_label}</span></dd></div><div><dt>Collected</dt><dd>{_html(collected)}</dd></div><div><dt>Audit mode</dt><dd>{'Saved source HTML' if offline else _html(report['mode'].replace('_', ' ').capitalize())}</dd></div></dl></header>
+{demonstration}<section id="overview" aria-labelledby="report-title"><header class="hero"><div><span class="eyebrow">{_icon('scope')}SEO · AEO · GEO</span><h1 id="report-title" class="hero-title">Website audit</h1><p class="hero-description">A clear view of the observed issues, supporting evidence and practical next steps for your website.</p><div class="target-link">{_link(report['target'])}{_icon('arrow')}</div></div><dl class="hero-meta"><div><dt>Auditor</dt><dd>{_html(auditor)}</dd></div><div><dt>Collection status</dt><dd><span class="collection-pill{collection_class}"><span class="status-dot" aria-hidden="true"></span>{collection_label}</span></dd></div><div><dt>Collected</dt><dd>{_html(collected)}</dd></div><div><dt>Audit mode</dt><dd>{'Saved source HTML' if offline else _html(report['mode'].replace('_', ' ').capitalize())}</dd></div></dl></header>
 <div class="kpis"><div class="kpi" data-kpi="issues" data-count="{len(issues)}"><div class="kpi-top"><span>Findings to review</span><span class="kpi-icon">{_icon('flag')}</span></div><strong class="kpi-value">{len(issues):,}</strong><p class="kpi-note">{counts['fail']:,} failed · {counts['warning']:,} review<br>Across {len(issue_urls):,} observed URL(s)</p></div><div class="kpi" data-kpi="pages" data-count="{len(pages)}"><div class="kpi-top"><span>Pages observed</span><span class="kpi-icon">{_icon('pages')}</span></div><strong class="kpi-value">{len(pages):,}</strong><p class="kpi-note">Source HTML analysed<br>Bounded collection, not the whole site</p></div><div class="kpi" data-kpi="passed" data-count="{counts['pass']}"><div class="kpi-top"><span>Passing checks</span><span class="kpi-icon">{_icon('check')}</span></div><strong class="kpi-value">{counts['pass']:,}</strong><p class="kpi-note">Explicit observed passes<br>Across {len(findings):,} recorded checks</p></div><div class="kpi" data-kpi="unchecked" data-count="{counts['not_checked']}"><div class="kpi-top"><span>Checks unavailable</span><span class="kpi-icon">{_icon('clock')}</span></div><strong class="kpi-value">{counts['not_checked']:,}</strong><p class="kpi-note">Individual checks without evidence<br>Broader limitations are listed below</p></div></div>
 <div class="overview-grid"><section class="panel" aria-labelledby="outcomes-title"><div class="panel-title"><div><h3 id="outcomes-title">Check outcomes</h3><p>What the collected evidence establishes</p></div><span class="panel-total"><b>{len(findings):,}</b> checks</span></div>{_bar(counts, 'All recorded checks')}<ul class="status-legend">{legend}</ul><p class="panel-footnote">Counts describe recorded checks. They are not a search ranking, site score or AI-citation probability.</p></section><section class="panel" aria-labelledby="categories-title"><div class="panel-title"><div><h3 id="categories-title">Review by category</h3><p>Use the evidence to choose the next action</p></div></div><div class="category-rows">{''.join(category_rows) or '<p class="table-note">No check categories were recorded.</p>'}</div></section></div>
 <div class="scope-note">{_icon('info')}<p><strong>Know the scope.</strong> This source-HTML audit does not establish Google indexing, rankings, AI citations, rendered-page behaviour or real-user Core Web Vitals. Imported measurements, when supplied, retain their own scope below.</p></div></section>
 <section class="section" id="findings" aria-labelledby="findings-title"><div class="section-heading"><div><span class="section-number">Investigate &amp; improve</span><h2 id="findings-title">Findings &amp; evidence</h2><p>Review the observation, confirm the intent and act on the recommendation.</p></div><span class="section-meta">{len(findings):,} checks · {len(observed_urls):,} URLs</span></div>
 <div class="filter-panel js-only" role="search" aria-label="Filter audit checks"><div class="filter-grid"><div class="field"><label for="finding-search">Search findings</label><div class="search-wrap">{_icon('search')}<input id="finding-search" type="search" placeholder="URL, check or evidence…" autocomplete="off"></div></div><div class="field"><label for="status-filter">Status</label><select id="status-filter"><option value="issues" selected>Needs attention</option><option value="all">All checks</option>{status_options}</select></div><div class="field"><label for="severity-filter">Severity</label><select id="severity-filter"><option value="all">All severities</option>{severity_options}</select></div><div class="field"><label for="category-filter">Category</label><select id="category-filter"><option value="all">All categories</option>{category_options}</select></div></div><div class="filter-second"><div class="field page-field"><label for="page-filter">Page or resource URL</label><select id="page-filter"><option value="all">All URLs</option>{page_options}</select></div><button class="button" id="reset-filters" type="button">Reset filters</button></div></div><div class="results-bar js-only"><span id="finding-count" role="status" aria-live="polite">{len(findings):,} recorded checks</span><button class="text-button" id="expand-findings" type="button">Expand visible evidence</button></div><div id="finding-list">{cards}</div><div class="empty-state" id="no-findings" hidden><h3>No checks match these filters</h3><p>Choose a different status, URL or search term to inspect the recorded evidence.</p></div>{'<div class="empty-state"><h3>No checks were recorded</h3><p>Review the collection scope and any stop reasons below.</p></div>' if not findings else ''}</section>
 <section class="section" id="pages" aria-labelledby="pages-title"><div class="section-heading page-heading"><div><span class="section-number">URL-level overview</span><h2 id="pages-title">Observed pages</h2><p id="page-count" role="status" aria-live="polite">{len(pages):,} source-HTML pages in this run</p></div><div class="field page-tools js-only"><label for="page-search">Search observed pages</label><div class="search-wrap">{_icon('search')}<input id="page-search" type="search" placeholder="Find a page or title…" autocomplete="off"></div></div></div><div class="table-shell"><table><caption>Responses, findings and declared canonicals for analysed HTML pages</caption><thead><tr><th scope="col">Page</th><th scope="col">HTTP</th><th scope="col">Findings</th><th scope="col">Not checked</th><th scope="col">Declared canonical</th></tr></thead><tbody>{''.join(page_rows) or '<tr><td colspan="5">No HTML pages were analysed.</td></tr>'}<tr id="no-pages" hidden><td colspan="5">No observed pages match this search.</td></tr></tbody></table></div><p class="table-note">This table covers analysed HTML pages. Resource and crawl-policy findings remain available in Findings &amp; evidence.</p></section>
-{measurements}{_comparison_html(report)}
+{wordpress}{measurements}{_comparison_html(report)}{implementation}
 <section class="section" id="coverage" aria-labelledby="coverage-title"><div class="section-heading"><div><span class="section-number">Transparency &amp; provenance</span><h2 id="coverage-title">Evidence &amp; collection scope</h2><p>Understand what was observed, what was skipped and what still needs verification.</p></div></div><div class="coverage-layout"><div class="panel"><div class="panel-title"><h3>Collection record</h3></div><dl class="coverage-grid">{coverage_stats}</dl></div><div class="panel"><ul class="scope-list"><li>{_icon('scope')}<div><strong>Selected scope</strong>{_link(scope_origin)}</div></li><li>{_icon('pages')}<div><strong>Coverage statement</strong>{_html(coverage.get('completeness_scope') or 'Coverage beyond the recorded sample is unverified.')}</div></li><li>{_icon('clock')}<div><strong>Stop reasons</strong>{_html(stop_text)}</div></li></ul></div></div><details class="raw-coverage" open><summary>Full collection evidence &amp; configured limits{_icon('chevron')}</summary><pre tabindex="0" aria-label="Full collection evidence">{_html(coverage)}</pre></details><div class="limitations"><h3>Checks not performed by this source audit</h3><ul>{''.join('<li>'+_html(item)+'</li>' for item in unchecked) or '<li>Consult the recorded scope and individual check statuses. Unspecified checks remain unverified.</li>'}</ul>{'<p class="table-note">Imported performance evidence is listed separately above; the source crawler did not perform those measurements.</p>' if measurements else ''}</div></section>
 <footer class="footer"><div><strong>eWebCity · Evidence, then action.</strong><p>This report did not apply changes to the audited website.</p></div><div class="footer-right"><p>Engine v{_html(report['tool_version'])} · Schema {_html(report['schema_version'])}</p><p>Structured evidence: audit.json · Action list: fixes.md</p></div></footer></main><script id="audit-interactions">{_SCRIPT}</script></body></html>'''
 
@@ -520,9 +625,27 @@ def _md(value) -> str:
 
 def render_fixes(report: dict) -> str:
     lines = ["# eWebCity audit: prioritised actions", "", f"Target: {_md(report['target'])}",
+             f"Auditor: {_md(_auditor(report.get('auditor')))}",
              f"Collected: {_md(report.get('collected_at'))}", "",
              "These are recommendations derived from observed evidence. This audit did not edit the website.",
              "Confirm the page's intended visibility and apply changes within the existing authorisation. Recheck each changed rule and retain the baseline.", ""]
+    if report.get("demonstration") is True or _has_synthetic_imports(report):
+        lines += ["**Demonstration evidence is included.** Synthetic imports are not live-site measurements or proof of a WordPress connection; inspect the provenance of each input.", ""]
+    context = report.get("implementation")
+    if isinstance(context, dict):
+        lines += ["## Implementation guidance", "",
+                  f"Platform: {_md(context.get('label') or context.get('platform') or 'Platform not supplied')}",
+                  f"Context basis: {_md(_implementation_basis(context.get('basis')))}", ""]
+        if context.get("note"):
+            lines += [_md(context["note"]), ""]
+        guidance = context.get("guidance")
+        if isinstance(guidance, list):
+            lines.extend("- " + _md(item) for item in guidance if isinstance(item, str))
+        references = context.get("references")
+        if isinstance(references, list) and references:
+            lines += ["", "Implementation references:", ""]
+            lines.extend(f"- {_md(item.get('label') or 'Official reference')}: {_md(item.get('url'))} (checked {_md(item.get('checked_at'))})" for item in references if isinstance(item, dict))
+        lines += [""]
     issues = _sorted_issues(report["findings"])
     if not issues:
         lines += ["No failing or warning checks were observed in the sample. This does not establish that unchecked areas passed.", ""]
@@ -534,6 +657,25 @@ def render_fixes(report: dict) -> str:
                   f"- Reference: {_md(finding.get('reference_url'))}", "", "Evidence:", ""]
         lines.extend("    " + line for line in _plain(finding.get("evidence", {})).splitlines())
         lines += ["", "Verification: re-run the same check on the affected URL, inspect the response/rendered output as applicable, and record an explicit result. A local fix is not evidence of deployment or indexing.", ""]
+    snapshot = report.get("wordpress")
+    if isinstance(snapshot, dict):
+        site = snapshot.get("site") if isinstance(snapshot.get("site"), dict) else {}
+        posts = snapshot.get("posts")
+        post_count = sum(isinstance(post, dict) for post in posts) if isinstance(posts, list) else 0
+        lines += ["## WordPress snapshot context", "",
+                  f"- Posts in this import: {post_count}",
+                  f"- Snapshot generated: {_md(snapshot.get('generated_at'))}",
+                  f"- Snapshot auditor: {_md(_auditor(snapshot.get('snapshot_auditor')))}",
+                  f"- Search visibility preference: {_md(_wordpress_visibility(site))}"]
+        lines.extend(f"- {_md(name)}: {_md(activity)}; version {_md(version)}" for name, activity, version in _wordpress_providers(snapshot))
+        lines += ["", "Saved settings and plugin overrides do not verify resolved frontend metadata, indexability or indexing. Coverage is limited to the imported records; these records do not change the source-audit check counts. Inspect report.html or audit.json for raw overrides and snapshot provenance.", ""]
+        if snapshot.get("note"):
+            lines += [_md(snapshot["note"]), ""]
+        limitations = snapshot.get("issues")
+        if isinstance(limitations, list) and limitations:
+            lines += ["Snapshot import limitations:", ""]
+            lines.extend("- " + _md(item) for item in limitations)
+            lines += [""]
     lines += ["## Coverage and limitations", ""]
     lines.extend("    " + line for line in _plain(report.get("coverage", {})).splitlines())
     lines += ["", "## Checks not performed", ""]

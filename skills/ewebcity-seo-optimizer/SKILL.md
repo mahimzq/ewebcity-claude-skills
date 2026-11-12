@@ -1,6 +1,6 @@
 ---
 name: ewebcity-seo-optimizer
-description: Audit and improve website technical SEO, AEO, GEO and performance with URL-level evidence, accurate crawler-specific diagnostics, interactive visual reports and verified repository fixes. Use for robots, sitemaps, indexing directives, canonicals, hreflang, structured data, JavaScript SEO, Core Web Vitals, AI search visibility and before/after reviews. Run bounded live or saved-HTML audits, import Lighthouse/PageSpeed/CrUX exports, and adapt to coding agents or chat-only environments without inventing unavailable measurements or capabilities.
+description: Audit and improve website technical SEO, AEO, GEO and performance across WordPress, Laravel, PHP, JavaScript and static sites. Use for Yoast SEO or Rank Math integration, robots, sitemaps, indexing, canonicals, hreflang, structured data, JavaScript SEO, Core Web Vitals, AI search visibility and before/after reviews. Run bounded live or saved-HTML audits, import WordPress and performance evidence, produce visual reports attributed to Mahim and verify authorised fixes. Adapt to coding agents or chat-only environments without inventing measurements or capabilities.
 ---
 
 # eWebCity SEO, AEO and GEO Optimizer
@@ -17,6 +17,8 @@ Read the relevant reference before making a recommendation:
 - `references/performance.md`: separate field Core Web Vitals, lab measurements and source-code observations.
 - `references/evidence-and-measurement.md`: finding records, coverage, provider exports and valid comparisons.
 - `references/execution-and-reporting.md`: choose a real execution mode, turn evidence into verifiable patches and deliver a useful visual report across agent environments.
+- `references/wordpress-integration.md`: connect the companion WordPress bridge or import its export; interpret Yoast/Rank Math settings without confusing them with rendered output.
+- `references/framework-workflows.md`: audit any supported public HTTP(S) page and locate fixes in WordPress, Laravel, PHP, JavaScript or static-site implementations.
 
 Use `scripts/audit.py` for a repeatable source-HTML audit. It requires Python 3.10+ and its bundled helper files, with no third-party Python packages. Locate the script relative to this skill's directory; do not assume the current directory is the skill directory.
 
@@ -37,9 +39,16 @@ python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
 python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
   --html ./page.html --url https://example.com/page --output ./seo-audit/evidence \
   --performance-json ./lighthouse.json --performance-json ./crux.json
+
+# Combine saved HTML and a WordPress bridge export without network access.
+python3 /path/to/ewebcity-seo-optimizer/scripts/audit.py \
+  --html ./page.html --url https://example.com/page --output ./seo-audit/wordpress \
+  --wordpress-json ./wordpress-snapshot.json --platform wordpress --auditor Mahim
 ```
 
 Treat example paths/domains as examples, not deployment configuration. Read `--help` for actual limits and local-development options. The script observes server HTML; it does not execute JavaScript, query search indexes, obtain private analytics or collect performance measurements itself. It can import supplied Lighthouse, PageSpeed Insights and CrUX API JSON with provenance. Expand the audit with available authorised tools when other checks matter.
+
+Reports default to **Auditor: Mahim**; use `--auditor` for an explicitly requested alternative. `--platform` selects implementation guidance, not technology detection. The optional WordPress companion plugin supplies stored Yoast/Rank Math overrides through a protected export or one explicit `--wordpress-api` connection. Read its reference before connecting; use environment-held Application Passwords and never put secrets into prompts, reports or command arguments. The connector does not write SEO settings. WordPress connection requests and public crawl coverage are recorded separately.
 
 ## Adapt to the actual host
 
@@ -65,6 +74,7 @@ Start with representative page types, then expand within the budget: home, servi
 - Where rendering matters, compare source HTML with the actual rendered DOM on representative templates. Record the browser/tool and result; source-only checks cannot establish the rendered result.
 - Import Search Console, Bing or analytics evidence only through an authorised connection or a supplied export. Preserve dates, property, filters, units and provenance. Mark unavailable checks **not checked**.
 - For performance exports, use repeatable `--performance-json` inputs. Preserve final URL, lab/field mode, URL/origin scope, device, aggregation and supplied collection dates. Never relabel TBT as INP, origin data as a page result or an old export as a new measurement. Explain rejected or omitted data and retain the source-file hash.
+- For WordPress, keep snapshot time, provider, pagination, omitted/truncated fields and file provenance visible. Empty or missing stored overrides can inherit valid provider defaults. Recheck actual frontend HTML/headers after authorised edits; imported settings cannot automatically pass or resolve source findings.
 - Report discovered, fetched, analysed and skipped URLs separately, including limits and stop reasons. Do not extrapolate untested templates or uncrawled pages into confirmed findings.
 
 Use statuses `pass`, `fail`, `warning`, `not_applicable` and `not_checked`. Keep severity, confidence and business priority separate. Every issue needs a stable rule ID, affected URL(s), evidence, impact, proposed fix, verification method and a current official source where applicable.

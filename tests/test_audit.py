@@ -163,6 +163,9 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(find(report["findings"], "http_status")["status"], "not_checked")
         self.assertEqual(find(report["findings"], "redirect_chain")["status"], "not_checked")
         self.assertEqual(find(report["findings"], "internal_link_target_response")["status"], "not_checked")
+        canonical = find(report["findings"], "canonical_signal_consistency")["evidence"]
+        self.assertFalse(canonical["headers_inspected"])
+        self.assertIn("HTTP headers were not inspected", canonical["observation"])
         self.assertIn("Core Web Vitals", " ".join(report["checks_not_performed"]))
         self.assertIn("only", report["coverage"]["completeness_scope"])
 

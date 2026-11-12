@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
-USER_AGENT = "EWebCitySEO/2.1 (+https://ewebcity.co.uk)"
+USER_AGENT = "EWebCitySEO/2.2 (+https://ewebcity.co.uk)"
 PRODUCT_TOKEN = "EWebCitySEO"
 
 

@@ -4,3 +4,4 @@ node_modules/
 *.tgz
 seo-audit/
 .DS_Store
+dist/

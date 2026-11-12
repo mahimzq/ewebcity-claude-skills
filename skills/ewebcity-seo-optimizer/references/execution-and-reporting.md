@@ -11,6 +11,7 @@ This workflow depends on the host's tools, not the model brand. A DeepSeek model
 | Readable files, no execution | Inspect the actual HTML/code/export and provide evidence with precise proposed fixes. | Report generation and any command that was not run. |
 | Rendered browser | Inspect representative templates, source/DOM differences and visible behaviour. | Whole-site claims and performance numbers without measurements. |
 | Authorised repository editing | Apply scoped fixes, run the project's checks and verify affected pages. | Production deployment, recrawling and indexing until separately observed. |
+| WordPress bridge export or explicitly authorised HTTPS endpoint | Import bounded stored Yoast/Rank Math overrides and site preferences with provenance. | Resolved frontend metadata, provider defaults, private content and any settings edits. |
 
 Locate `scripts/audit.py` relative to the installed skill. Run `--help` first when the installed version is uncertain. Use `python3` on macOS/Linux or the available Python 3.10+ executable on Windows. The repository's Node launcher accepts `EWEBCITY_PYTHON` when Python has a custom executable path. Do not install an arbitrary package merely to satisfy a command that the environment cannot run.
 
@@ -38,6 +39,7 @@ The generated `report.html` is self-contained and works offline. It should make 
 - Lab runs, field percentiles and URL/origin evidence occupy separate performance cards.
 - `not_checked`, skipped pages, budgets, decoding limitations and collection failures stay visible.
 - Comparisons require compatible checks and explicit re-observation; missing data does not mean resolved.
+- Auditor attribution defaults to Mahim in new outputs. Imported WordPress settings and selected framework guidance remain outside the source-check counts.
 
 Use search and the status/severity/category/page filters to focus the interactive view. Keep a way to reset filters and expand evidence. With JavaScript disabled, all findings must remain readable. Use print preview to inspect page breaks and save a PDF through the browser when that output is requested; producing HTML alone is not proof of a good PDF layout.
 

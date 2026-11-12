@@ -1,4 +1,4 @@
 interface:
   display_name: "eWebCity SEO, AEO & GEO"
   short_description: "Audit websites with evidence and visual reports"
-  default_prompt: "Use $ewebcity-seo-optimizer to audit this website, produce a visual report and verify the requested fixes."
+  default_prompt: "Use $ewebcity-seo-optimizer to audit this website, include supplied WordPress or performance evidence, produce a visual report attributed to Mahim and verify the requested fixes."
