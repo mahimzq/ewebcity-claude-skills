@@ -1,0 +1,58 @@
+{
+  "_demonstration": true,
+  "format": "ewebcity-wordpress-snapshot",
+  "schema_version": "1.0",
+  "bridge_version": "2.2.0",
+  "generated_at": "2026-11-12T10:20:30Z",
+  "auditor": "Mahim",
+  "metadata_semantics": "stored_provider_overrides_not_rendered_metadata",
+  "site": {
+    "home_url": "https://example.org/",
+    "site_url": "https://example.org/wordpress/",
+    "search_visibility": "allow",
+    "permalink_structure": "/%postname%/"
+  },
+  "providers": [
+    {"id": "yoast", "active": true, "version": "fixture-yoast"},
+    {"id": "rankmath", "active": true, "version": "fixture-rankmath"}
+  ],
+  "pagination": {"page": 1, "per_page": 20, "total_posts": 2, "total_pages": 1},
+  "posts": [
+    {
+      "id": 1,
+      "type": "post",
+      "url": "https://example.org/post-1/",
+      "modified_gmt": "2026-11-12T10:20:30Z",
+      "metadata": {
+        "yoast": {
+          "title": "%%title%% | Example",
+          "description": "",
+          "canonical": null,
+          "robots_noindex": "2",
+          "robots_nofollow": "0",
+          "robots_advanced": "nosnippet"
+        },
+        "rankmath": {
+          "title": "%title% | Example",
+          "description": "Stored description",
+          "canonical": "/raw-relative-canonical",
+          "robots": ["index", "follow"]
+        }
+      },
+      "truncated_fields": [],
+      "omitted_fields": []
+    },
+    {
+      "id": 7,
+      "type": "page",
+      "url": "https://example.org/post-7/",
+      "modified_gmt": "2026-11-12T10:20:30Z",
+      "metadata": {
+        "yoast": {"title": null, "description": null, "canonical": null, "robots_noindex": null, "robots_nofollow": null, "robots_advanced": null},
+        "rankmath": {"title": null, "description": null, "canonical": null, "robots": []}
+      },
+      "truncated_fields": [],
+      "omitted_fields": []
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "_demonstration": "Synthetic values for the public report example. Not a real Lighthouse run.",
+  "requestedUrl": "https://example.com/studio",
+  "finalUrl": "https://example.com/studio",
+  "fetchTime": "2026-11-12T09:30:00Z",
+  "lighthouseVersion": "synthetic-example",
+  "configSettings": {"formFactor": "mobile", "throttlingMethod": "simulate"},
+  "audits": {
+    "largest-contentful-paint": {"numericValue": 3150, "numericUnit": "millisecond"},
+    "cumulative-layout-shift": {"numericValue": 0.07, "numericUnit": "unitless"},
+    "first-contentful-paint": {"numericValue": 1650, "numericUnit": "millisecond"},
+    "total-blocking-time": {"numericValue": 240, "numericUnit": "millisecond"},
+    "speed-index": {"numericValue": 3480, "numericUnit": "millisecond"}
+  }
+}

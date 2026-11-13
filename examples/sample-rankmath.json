@@ -1,0 +1,37 @@
+{
+  "_demonstration": true,
+  "format": "ewebcity-wordpress-snapshot",
+  "schema_version": "1.0",
+  "bridge_version": "2.2.0",
+  "metadata_semantics": "stored_provider_overrides_not_rendered_metadata",
+  "generated_at": "2026-11-12T09:00:00Z",
+  "auditor": "Mahim",
+  "site": {
+    "home_url": "https://example.com/",
+    "site_url": "https://example.com/",
+    "search_visibility": "allow",
+    "permalink_structure": "/%postname%/"
+  },
+  "providers": [
+    {"id": "rankmath", "active": true, "version": "synthetic-example"}
+  ],
+  "pagination": {"page": 1, "per_page": 20, "total_posts": 1, "total_pages": 1},
+  "posts": [
+    {
+      "id": 1,
+      "type": "page",
+      "url": "https://example.com/studio",
+      "modified_gmt": "2026-11-11T12:00:00Z",
+      "metadata": {
+        "rankmath": {
+          "title": "%title% %sep% %sitename%",
+          "description": "",
+          "canonical": null,
+          "robots": []
+        }
+      },
+      "truncated_fields": [],
+      "omitted_fields": []
+    }
+  ]
+}
